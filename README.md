@@ -16,8 +16,12 @@ TerpreT: A Probabilistic Programming Language for Program Induction <https://arx
 
 Differentiable Functional Program Interpreters <https://www.microsoft.com/en-us/research/wp-content/uploads/2017/03/nfp.pdf>
 
+Learning Program Embeddings to Propagate Feedback on Student Code <https://stanford.edu/~cpiech/bio/papers/programEncoding.pdf>
+
+
 # Other
 
 Grammar variational autoencoders <https://arxiv.org/abs/1703.01925>. This is a paper where they generate strings which are always valid syntactically. As an example, they do symbolic regression with formulas.
 
 Neural architecture search with reinforcement learning <https://arxiv.org/pdf/1611.01578.pdf>
+
