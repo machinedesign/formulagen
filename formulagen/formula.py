@@ -1,3 +1,5 @@
+import pickle
+
 from functools import partial
 from itertools import chain
 from collections import Counter
@@ -5,16 +7,67 @@ from collections import namedtuple
 from collections import defaultdict
 import json
 
+from lark import Lark
+from lark import InlineTransformer
+from lark.lexer import Token
+from lark.common import ParseError
+
 import numpy as np
 
 Node = namedtuple('Node', ['label', 'left', 'right', 'unit'])
 
+parser_op_mapping = {
+    'add': '+',
+    'sub': '-',
+    'mul': '*',
+    'div': '/',
+    'sin': 'sin',
+    'cos': 'cos',
+    'tan': 'tan',
+    'log': 'log',
+    'exp': 'exp',
+    'neg': '-'
+}
+parser = Lark(
+    '''
+    ?sum: product
+         | sum "+" product   -> add
+         | sum "-" product   -> sub
+
+     ?product: item
+         | product "*" item  -> mul
+         | product "/" item  -> div
+
+     ?item: NUMBER
+          | NAME      
+          | "-" item         -> neg
+          | "cos" "(" sum ")"        -> cos
+          | "sin" "(" sum ")"       -> sin
+          | "tan" "(" sum ")"       -> tan
+          | "exp" "(" sum ")"       -> exp
+          | "log" "(" sum ")"       -> log
+          | "(" sum ")"
+    
+     %import common.NUMBER
+     %import common.WS
+     %ignore WS
+     %import common.CNAME -> NAME
+''', start='sum')
+
+
+def calc_tree(expr):
+    return parser.parse(expr)
+
 
 class Unit(defaultdict):
     
-    def __init__(self, d={}):
+    def __init__(self, d=None):
+        if d is None:
+            d = {}
+        if (d) == int:
+            d = {}
         super().__init__(int, d)
-    
+
     def __add__(self, c):
         for k in self.keys():
             self[k] += c
@@ -93,15 +146,6 @@ def gen_formula_tree(symbols, units, min_depth=1, max_depth=2, unit_constraints=
                         unit = lnode.unit * rnode.unit
                     elif op == '/':
                         unit = lnode.unit // rnode.unit
-            """
-            elif op == '^':
-                if force_unit is not None:
-                    lnode = _gen(rng, depth=depth + 1)
-                    rnode = Node(label=_gen_constant(), left=None, right=None, unit=constant_unit)
-                    unit = lnode.unit + rnode.label
-                else:
-                    pass
-            """
             return Node(label=op, unit=unit, left=lnode, right=rnode)
         elif action == 'unary_op':
             choices = ('-', 'exp', 'sin', 'cos', 'tan', 'log')
@@ -137,27 +181,67 @@ def gen_formula_tree(symbols, units, min_depth=1, max_depth=2, unit_constraints=
 
 constant_unit = Unit() 
 
+def check_constraints(node):
+    if node.left and node.right:
+        if node.label in ('+', '-'):
+            assert node.left.unit == node.right.unit
+        elif node.label == '*':
+            assert node.unit == node.left.unit * node.right.unit
+        elif node.label == '/':
+            assert node.unit == node.left.unit // node.right.unit
+        check_constraints(node.left)
+        check_constraints(node.right)
+    elif node.left:
+        if node.label != '-':
+            assert node.left.unit == constant_unit
+        assert node.unit == node.left.unit
+        check_constraints(node.left)
+
+def as_tree(s, units):
+    t = calc_tree(s)
+    def _to_tree(t):
+        if isinstance(t, Token):
+            if t in units.keys():
+                unit = units[t]
+            else:
+                unit = constant_unit
+            return Node(label=t.value, left=None, right=None, unit=unit)
+        elif len(t.children) == 2:
+            left, right = t.children
+            left = _to_tree(left)
+            right = _to_tree(right)
+            op = t.data
+            if op in ('add', 'sub'):
+                unit = left.unit
+            elif op == 'mul':
+                unit = left.unit * right.unit
+            elif op == 'div':
+                unit = left.unit // right.unit
+            op = parser_op_mapping[op]
+            return Node(label=op, left=left, right=right, unit=unit)
+        elif len(t.children) == 1:
+            left, = t.children
+            left = _to_tree(left)
+            unit = left.unit
+            op = t.data
+            op = parser_op_mapping[op]
+            return Node(label=op, left=left, right=None, unit=unit)
+        else:
+            raise ValueError('nb of children must be 1 or 2')
+    return _to_tree(t)
+
 
 def as_str(f):
     if f.left and f.right:
-        s = as_str(f.left) + ' ' + f.label + ' ' + as_str(f.right)
-        s = '( ' + s + ' )'
+        s = as_str(f.left) + f.label + as_str(f.right)
+        s = '(' + s + ')'
         return s
     elif f.left:
+        if f.label == '-':
+            return '(' + f.label + '(' + as_str(f.left) + '))'
         return f.label + '(' + as_str(f.left) + ')'
     else:
         return str(f.label)
-
-
-def as_sympy(f, symbol_names):
-    from sympy import symbols
-    from sympy import cos, tan, sin, exp, log
-    symbols = symbols(' '.join(symbol_names))
-    for n, v in zip(symbol_names, symbols):
-        locals()[n] = v
-    s = 'result = {}'.format(as_str(f))
-    exec(s)
-    return locals()['result']
 
 
 def generate_dataset(generate_one, nb=1000, random_state=None):
@@ -172,46 +256,29 @@ def generate_dataset(generate_one, nb=1000, random_state=None):
             data.append(inst)
     return data
 
+
 def save_dataset(data, symbols, units, filename):
     content = {
         'symbols' : symbols,
         'units' : units,
         'data' : data
     }
-    with open(filename, 'w') as fd:
-        json.dump(content, fd, indent=4)
+    with open(filename, 'wb') as fd:
+        pickle.dump(content, fd)
+
+
+def load_dataset(filename):
+    with open(filename, 'rb') as fd:
+        content = pickle.load(fd)
+    return content
 
 if __name__ == '__main__':
-    symbols = ('x', 'y', 'z', 'b')
-    units = {}
-    units['x'] = Unit({'m': 1})
-    units['y'] = Unit({'s': 1})
-    units['z'] = Unit({'g': 1})
-    units['b'] = Unit()
-
-    generate_one = partial(
-        gen_formula_tree,
-        symbols=symbols,
-        units=units,
-        min_depth=2,
-        max_depth=10,
-        unit_constraints=True
-    )
-    nb = 10000
-    data = generate_dataset(generate_one, nb=nb)
-    data = map(as_str, data)
-    data = list(data)
-    save_dataset(data, symbols, units, 'formulas_constraints.json')
-
-    generate_one = partial(
-        gen_formula_tree,
-        symbols=symbols,
-        units=units,
-        min_depth=2,
-        max_depth=10,
-        unit_constraints=False
-    )
-    data = generate_dataset(generate_one, nb=nb)
-    data = map(as_str, data)
-    data = list(data)
-    save_dataset(data, symbols, units, 'formulas.json')
+    #generate_data()
+    dataset = load_dataset('formulas_constraints.pkl')
+    data = dataset['data']
+    units = dataset['units']
+    s = as_str(data[0])
+    print(s)
+    t = as_tree(s, units)
+    print(as_str(t))
+    check_constraints(t)
