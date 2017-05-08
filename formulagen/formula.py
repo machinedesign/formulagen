@@ -1,12 +1,14 @@
-import numpy as np
+from functools import partial
 from itertools import chain
 from collections import Counter
 from collections import namedtuple
 from collections import defaultdict
+import json
 
-import sympy
+import numpy as np
 
 Node = namedtuple('Node', ['label', 'left', 'right', 'unit'])
+
 
 class Unit(defaultdict):
     
@@ -43,13 +45,9 @@ class Unit(defaultdict):
     def __repr__(self):
         return ' '.join(['{}:{}'.format(k, v) for k, v in self.items()])
 
-def gen_formula(symbols=('x',), units={'x': {'m': 1}}, min_depth=2, max_depth=4, unit_constraints=True, random_state=None):
-    return _gen_formula_tree(symbols, units, min_depth=min_depth, max_depth=max_depth, 
-                             unit_constraints=unit_constraints, random_state=random_state)
 
-def _gen_formula_tree(symbols, units, min_depth=1, max_depth=2, random_state=None, unit_constraints=True):
+def gen_formula_tree(symbols, units, min_depth=1, max_depth=2, unit_constraints=True, random_state=None):
     rng = np.random.RandomState(random_state)
-
     def _gen(rng, depth=0, force_unit=None):
         if depth >= max_depth:
             choices = ('cst', 'symbol')
@@ -136,7 +134,9 @@ def _gen_formula_tree(symbols, units, min_depth=1, max_depth=2, random_state=Non
 
     return _gen(rng)
 
+
 constant_unit = Unit() 
+
 
 def as_str(f):
     if f.left and f.right:
@@ -148,6 +148,7 @@ def as_str(f):
     else:
         return str(f.label)
 
+
 def as_sympy(f, symbol_names):
     from sympy import symbols
     from sympy import cos, tan, sin, exp, log
@@ -157,17 +158,60 @@ def as_sympy(f, symbol_names):
     s = 'result = {}'.format(as_str(f))
     exec(s)
     return locals()['result']
-    
+
+
+def generate_dataset(generate_one, nb=1000, random_state=None):
+    np.random.seed(random_state)
+    data = []
+    while len(data) < nb:
+        try:
+            inst = generate_one()
+        except ValueError:
+            continue
+        else:
+            data.append(inst)
+    return data
+
+def save_dataset(data, symbols, units, filename):
+    content = {
+        'symbols' : symbols,
+        'units' : units,
+        'data' : data
+    }
+    with open(filename, 'w') as fd:
+        json.dump(content, fd, indent=4)
+
 if __name__ == '__main__':
-    symbols = ('x', 'y', 'b')
+    symbols = ('x', 'y', 'z', 'b')
     units = {}
     units['x'] = Unit({'m': 1})
     units['y'] = Unit({'s': 1})
+    units['z'] = Unit({'g': 1})
     units['b'] = Unit()
-    seed = np.random.randint(1, 100)
-    #seed = 22
-    print(seed)
-    f = gen_formula(symbols=symbols, units=units,  min_depth=2, max_depth=10, random_state=seed, unit_constraints=False)
-    print(as_str(f))
-    s = as_sympy(f, symbols)
-    print(s)
+
+    generate_one = partial(
+        gen_formula_tree,
+        symbols=symbols,
+        units=units,
+        min_depth=2,
+        max_depth=10,
+        unit_constraints=True
+    )
+    nb = 10000
+    data = generate_dataset(generate_one, nb=nb)
+    data = map(as_str, data)
+    data = list(data)
+    save_dataset(data, symbols, units, 'formulas_constraints.json')
+
+    generate_one = partial(
+        gen_formula_tree,
+        symbols=symbols,
+        units=units,
+        min_depth=2,
+        max_depth=10,
+        unit_constraints=False
+    )
+    data = generate_dataset(generate_one, nb=nb)
+    data = map(as_str, data)
+    data = list(data)
+    save_dataset(data, symbols, units, 'formulas.json')
