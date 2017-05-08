@@ -27,13 +27,25 @@ log = logging.getLogger(__name__)
 log.setLevel('INFO')
 
 def full():
+    """
+    do the full pipeline
+    """
+    # generate formulas with and without constraints
+    # take 1 formula from the constrained ones, use it to
+    # generate a numerical dataset
     generate_data()
+    # train a generator on formulas
     train(data='data/formulas.pkl', out_model='models/formulas.pkl')
+    # train a generator on constrained formulas
     train(data='data/formulas_constraints.pkl', out_model='models/formulas_constraints.pkl')
+    # generate formulas from the model trained on unconstrained formulas and and evaluate 
+    # on the numerical dataset
     generate_formulas(points='data/dataset.npz', 
                       formulas='data/formulas_constraints.pkl', 
                       model='models/formulas_constraints.pkl', 
                       out='out/formulas_constraints.csv')
+    # generate formulas from the model trained on constrained formulas and evaluate
+    # on the numerical dataset
     generate_formulas(points='data/dataset.npz', 
                       formulas='data/formulas.pkl', 
                       model='models/formulas.pkl', 
@@ -41,11 +53,18 @@ def full():
 
 
 def generate_data():
+    """
+    generate:
+        1) a dataset unconstrained formulas
+        2) a dataset of constrained formulas
+        3) a dataset of points with their corresponding outputs using a randomly chosen formula
+           from the unconstrained ones
+    """
     import theano
     nb = 1000
     min_depth = 2
     max_depth = 10
-    nb_points = 1000
+    nb_points = 10000
     folder = 'data'
 
     symbols = ('x', 'y', 'z', 'b')
@@ -67,6 +86,7 @@ def generate_data():
     data = generate_dataset(gen_with_constraints, nb=nb)
     data = list(data)
     # take one formula and use it as a held-out formula
+    np.random.shuffle(data)
     formula = data[0]
     data = data[1:]
     name = os.path.join(folder, 'formulas_constraints.pkl')
@@ -92,6 +112,10 @@ def generate_data():
 
 
 def train(*, data='data/formulas.pkl', out_model='models/model.pkl'):
+    """
+    train a formula generator on the dataset 'data' and save the model
+    on out_model
+    """
     log.info('Loading dataset in {}...'.format(data))
     dataset = load_dataset(data)
     data = dataset['data']
@@ -103,10 +127,16 @@ def train(*, data='data/formulas.pkl', out_model='models/model.pkl'):
     _save_model(model, out_model)
 
 
-def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl', model='models/model.pkl', out='out/formulas.csv'):
+def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl', 
+                      model='models/model.pkl', out='out/formulas.csv'):
+    """
+    1) generate a set of formulas from a generator 'model' trained on the dataset 'formulas'
+    2) evaluate each generated formula on the dataset 'points'
+    3) write the results of the eevaluation on 'out'
+    """
     import theano
     import pandas as pd
-    nb = 1000
+    nb = 10000
     rng = np.random
 
     log.info('Loading dataset in {}...'.format(formulas))
@@ -153,12 +183,14 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
         pred = theano.function([vars[s] for s in symbols], vars['result'], on_unused_input='ignore')
         y_pred = pred(*[x for x in X.T])
         mse = ((y_pred - y_true) ** 2).mean()
-        r2 = mse / y_pred.var()
+        r2 = 1.0 - mse / y_true.var()
         df.append({'mse': mse, 'r2': r2})
     pd.DataFrame(df).to_csv(out)
 
 
 def plot():
+    """
+    """
     import pandas as pd
     from bokeh.plotting import figure, output_file, show
     from bokeh.layouts import row
@@ -176,14 +208,14 @@ def plot():
     df2 = df2.dropna()
     df2 = df2.sort_values(by='r2')
     
-    p = figure(title="evolution R2 with iter")
+    p = figure(title="evolution of log.MSE with iter")
     
     iter = np.arange(len(df2))
-    val = df1['r2']
+    val = np.log(df1['mse'])
     p.line(iter, val, legend="without constraints", line_width=2, color='blue')
 
     iter = np.arange(len(df2))
-    val = df2['r2']
+    val = np.log(df2['mse'])
     p.line(iter, val, legend="with constraints", line_width=2, color='red')
     show(p)
 
