@@ -226,6 +226,15 @@ def as_tree(s, units):
             raise ValueError('nb of children must be 1 or 2')
     return _as_tree(t)
 
+def get_symbols(t):
+    if t.left and t.right:
+        return get_symbols(t.left) | get_symbols(t.right)
+    elif t.left:
+        return get_symbols(t.left)
+    else:
+        return set([t.label])
+
+
 def as_theano(s, symbols):
     import theano.tensor as T
     import theano

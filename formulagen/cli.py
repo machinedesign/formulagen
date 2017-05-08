@@ -8,6 +8,7 @@ import numpy as np
 
 from machinedesign.text.ngram import NGram
 
+from formulagen.formula import get_symbols
 from formulagen.formula import gen_formula_tree
 from formulagen.formula import generate_dataset
 from formulagen.formula import constant_unit
@@ -61,10 +62,10 @@ def generate_data():
            from the unconstrained ones
     """
     import theano
-    nb = 1000
+    nb = 10000
     min_depth = 2
     max_depth = 10
-    nb_points = 10000
+    nb_points = 1000
     folder = 'data'
 
     symbols = ('x', 'y', 'z', 'b')
@@ -86,9 +87,13 @@ def generate_data():
     data = generate_dataset(gen_with_constraints, nb=nb)
     data = list(data)
     # take one formula and use it as a held-out formula
-    np.random.shuffle(data)
-    formula = data[0]
-    data = data[1:]
+    for i, d in enumerate(data):
+        syms = get_symbols(d)
+        if len(set(['x', 'y', 'z', 'b']) & syms) == 4:
+            print(as_str(d))
+            break
+    formula = data[i]
+    data = data[0:i] + data[i + 1:]
     name = os.path.join(folder, 'formulas_constraints.pkl')
     log.info('Save dataset to {}'.format(name))
     save_dataset(data, symbols, units, name)
@@ -179,8 +184,14 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     for i, formula in enumerate(G):
         if not syntax_ok[i]:
             continue
-        vars = as_theano(formula, symbols)
-        pred = theano.function([vars[s] for s in symbols], vars['result'], on_unused_input='ignore')
+        try:
+            vars = as_theano(formula, symbols)
+        except ZeroDivisionError:
+            continue
+        try:
+            pred = theano.function([vars[s] for s in symbols], vars['result'], on_unused_input='ignore')
+        except TypeError:
+            continue
         y_pred = pred(*[x for x in X.T])
         mse = ((y_pred - y_true) ** 2).mean()
         r2 = 1.0 - mse / y_true.var()
@@ -190,6 +201,8 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
 
 def plot():
     """
+    plot evolution of MSE for the model trained on unconstrained
+    formulas and for the model trained on constrained formulas.
     """
     import pandas as pd
     from bokeh.plotting import figure, output_file, show
@@ -201,21 +214,23 @@ def plot():
     output_file(out)
 
     df1 = pd.read_csv(d1, index_col=0)
-    df1 = df1.dropna()
-    df1 = df1.sort_values(by='r2')
-    
+    df1 = df1.replace([np.inf, -np.inf], np.nan)
+    df1 = df1.dropna(subset=['mse'])
+    df1 = df1.sort_values(by='mse', ascending=False)
+
     df2 = pd.read_csv(d2, index_col=0)
-    df2 = df2.dropna()
-    df2 = df2.sort_values(by='r2')
+    df2 = df2.replace([np.inf, -np.inf], np.nan)
+    df2 = df2.dropna(subset=['mse'])
+    df2 = df2.sort_values(by='mse', ascending=False)
     
     p = figure(title="evolution of log.MSE with iter")
     
     iter = np.arange(len(df2))
-    val = np.log(df1['mse'])
+    val = np.log(1 + df1['mse'])
     p.line(iter, val, legend="without constraints", line_width=2, color='blue')
 
     iter = np.arange(len(df2))
-    val = np.log(df2['mse'])
+    val = np.log(1 + df2['mse'])
     p.line(iter, val, legend="with constraints", line_width=2, color='red')
     show(p)
 
