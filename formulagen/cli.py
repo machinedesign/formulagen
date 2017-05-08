@@ -206,35 +206,37 @@ def plot():
     """
     import pandas as pd
     from bokeh.plotting import figure, output_file, show
+    from bokeh.charts import Histogram
     from bokeh.layouts import row
 
     d1 = 'out/formulas.csv'
     d2 = 'out/formulas_constraints.csv'
-    out = 'out/scatter.html'
-    output_file(out)
 
     df1 = pd.read_csv(d1, index_col=0)
     df1 = df1.replace([np.inf, -np.inf], np.nan)
     df1 = df1.dropna(subset=['mse'])
     df1 = df1.sort_values(by='mse', ascending=False)
+    val1 = np.log(1 + df1['mse'])
 
     df2 = pd.read_csv(d2, index_col=0)
     df2 = df2.replace([np.inf, -np.inf], np.nan)
     df2 = df2.dropna(subset=['mse'])
     df2 = df2.sort_values(by='mse', ascending=False)
-    
+    val2 = np.log(1 + df2['mse'])
+
     p = figure(title="evolution of log.MSE with iter")
     
     iter = np.arange(len(df2))
-    val = np.log(1 + df1['mse'])
-    p.line(iter, val, legend="without constraints", line_width=2, color='blue')
+    p.line(iter, val1, legend="without constraints", line_width=2, color='blue')
 
     iter = np.arange(len(df2))
-    val = np.log(1 + df2['mse'])
-    p.line(iter, val, legend="with constraints", line_width=2, color='red')
-    show(p)
+    p.line(iter, val2, legend="with constraints", line_width=2, color='red')
+    output_file('out/scatter.html')
 
-
+    df = [{'val': v, 'type': 'without constraints'} for v in val1] + [{'val': v, 'type': 'with constraints'} for v in val2]
+    df = pd.DataFrame(df)
+    p = Histogram(df, values='val', color='type', density=True) 
+    output_file('out/hist.html')
 
 def _fit_model(corpus):
     min_gram = 1
