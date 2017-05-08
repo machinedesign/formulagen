@@ -55,10 +55,6 @@ parser = Lark(
 ''', start='sum')
 
 
-def calc_tree(expr):
-    return parser.parse(expr)
-
-
 class Unit(defaultdict):
     
     def __init__(self, d=None):
@@ -198,8 +194,8 @@ def check_constraints(node):
         check_constraints(node.left)
 
 def as_tree(s, units):
-    t = calc_tree(s)
-    def _to_tree(t):
+    t = parser.parse(s)
+    def _as_tree(t):
         if isinstance(t, Token):
             if t in units.keys():
                 unit = units[t]
@@ -208,8 +204,8 @@ def as_tree(s, units):
             return Node(label=t.value, left=None, right=None, unit=unit)
         elif len(t.children) == 2:
             left, right = t.children
-            left = _to_tree(left)
-            right = _to_tree(right)
+            left = _as_tree(left)
+            right = _as_tree(right)
             op = t.data
             if op in ('add', 'sub'):
                 unit = left.unit
@@ -221,15 +217,27 @@ def as_tree(s, units):
             return Node(label=op, left=left, right=right, unit=unit)
         elif len(t.children) == 1:
             left, = t.children
-            left = _to_tree(left)
+            left = _as_tree(left)
             unit = left.unit
             op = t.data
             op = parser_op_mapping[op]
             return Node(label=op, left=left, right=None, unit=unit)
         else:
             raise ValueError('nb of children must be 1 or 2')
-    return _to_tree(t)
+    return _as_tree(t)
 
+def as_theano(s, symbols):
+    import theano.tensor as T
+    import theano
+    vars = {s: T.fvector(name=s) for s in symbols}
+    for sym in symbols:
+        locals()[sym] = vars[sym]
+    ops = ['sin', 'cos', 'tan', 'log', 'exp']
+    for op in ops:
+        s = s.replace(op, 'T.' + op)
+    s = 'vars["result"] = ' + s
+    exec(s)
+    return vars
 
 def as_str(f):
     if f.left and f.right:
@@ -273,12 +281,4 @@ def load_dataset(filename):
     return content
 
 if __name__ == '__main__':
-    #generate_data()
-    dataset = load_dataset('formulas_constraints.pkl')
-    data = dataset['data']
-    units = dataset['units']
-    s = as_str(data[0])
-    print(s)
-    t = as_tree(s, units)
-    print(as_str(t))
-    check_constraints(t)
+    print(as_theano('log(x+1+y)', ('x', 'y')))
