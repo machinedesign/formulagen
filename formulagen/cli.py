@@ -25,7 +25,7 @@ from formulagen.formula import as_theano
 fmt = ''
 logging.basicConfig(format=fmt)
 log = logging.getLogger(__name__)
-log.setLevel('INFO')
+log.setLevel('DEBUG')
 
 def full():
     """
@@ -62,7 +62,7 @@ def generate_data():
            from the unconstrained ones
     """
     import theano
-    nb = 10000
+    nb_formulas = 10000
     min_depth = 2
     max_depth = 10
     nb_points = 1000
@@ -84,13 +84,13 @@ def generate_data():
     )
     # generate with constraints
     gen_with_constraints = partial(gen, unit_constraints=True)
-    data = generate_dataset(gen_with_constraints, nb=nb)
+    data = generate_dataset(gen_with_constraints, nb=nb_formulas)
     data = list(data)
     # take one formula and use it as a held-out formula
     for i, d in enumerate(data):
         syms = get_symbols(d)
         if len(set(['x', 'y', 'z', 'b']) & syms) == 4:
-            print(as_str(d))
+            log.info('Held-out formula : ' + as_str(d))
             break
     formula = data[i]
     data = data[0:i] + data[i + 1:]
@@ -101,7 +101,7 @@ def generate_data():
         check_constraints(d)
     # generate without constraints
     gen_without_constraints = partial(gen, unit_constraints=False)
-    data = generate_dataset(gen_without_constraints, nb=nb)
+    data = generate_dataset(gen_without_constraints, nb=nb_formulas)
     data = list(data)
     name = os.path.join(folder, 'formulas.pkl')
     log.info('Save dataset to {}'.format(name))
@@ -141,7 +141,7 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     """
     import theano
     import pandas as pd
-    nb = 10000
+    nb_generated = 10000
     rng = np.random
 
     log.info('Loading dataset in {}...'.format(formulas))
@@ -156,7 +156,7 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     log.info('Generate...')
     max_size = max(map(len, data_str))
     model = _load_model(model)
-    G = [model.generate(rng, max_size=max_size) for _ in range(nb)]
+    G = [model.generate(rng, max_size=max_size) for _ in range(nb_generated)]
     G = list(set(G))
     total = len(G)
     syntax_ok = [False] * len(G)
@@ -177,7 +177,7 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     log.debug('Syntax ok       : {}'.format(sum(syntax_ok)))
     log.debug('Constraints ok  : {}'.format(sum(constraints_ok)))
     log.debug('Total unique    : {}'.format(total))
-    log.debug('Total generated : {}'.format(nb))
+    log.debug('Total generated : {}'.format(nb_generated))
 
     log.info('Regress...')
     df = []
@@ -195,7 +195,7 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
         y_pred = pred(*[x for x in X.T])
         mse = ((y_pred - y_true) ** 2).mean()
         r2 = 1.0 - mse / y_true.var()
-        df.append({'mse': mse, 'r2': r2})
+        df.append({'mse': mse, 'r2': r2, 'formula': formula})
     pd.DataFrame(df).to_csv(out)
 
 
@@ -216,27 +216,30 @@ def plot():
     df1 = df1.replace([np.inf, -np.inf], np.nan)
     df1 = df1.dropna(subset=['mse'])
     df1 = df1.sort_values(by='mse', ascending=False)
+    log.info('without constraints : ' + df1['formula'].iloc[-1])
     val1 = np.log(1 + df1['mse'])
 
     df2 = pd.read_csv(d2, index_col=0)
     df2 = df2.replace([np.inf, -np.inf], np.nan)
     df2 = df2.dropna(subset=['mse'])
     df2 = df2.sort_values(by='mse', ascending=False)
+    log.info('with constraints : ' + df2['formula'].iloc[-1])
     val2 = np.log(1 + df2['mse'])
-
-    p = figure(title="evolution of log.MSE with iter")
     
-    iter = np.arange(len(df2))
-    p.line(iter, val1, legend="without constraints", line_width=2, color='blue')
-
-    iter = np.arange(len(df2))
-    p.line(iter, val2, legend="with constraints", line_width=2, color='red')
     output_file('out/scatter.html')
-
+    p = figure(title="evolution of log.MSE with iter")
+    p.line(np.arange(len(val1)), val1, legend="without constraints", line_width=2, color='blue')
+    p.line(np.arange(len(val2)), val2, legend="with constraints", line_width=2, color='red')
+    show(p)
+    """
     df = [{'val': v, 'type': 'without constraints'} for v in val1] + [{'val': v, 'type': 'with constraints'} for v in val2]
     df = pd.DataFrame(df)
-    p = Histogram(df, values='val', color='type', density=True) 
+
     output_file('out/hist.html')
+    p = Histogram(df, values='val', color='type', density=True) 
+    show(p)
+    """
+
 
 def _fit_model(corpus):
     min_gram = 1
