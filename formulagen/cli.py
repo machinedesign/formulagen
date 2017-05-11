@@ -41,9 +41,9 @@ def full():
     os.mkdir(data_folder)
     os.mkdir(models_folder)
     os.mkdir(out_folder)
-    nb_formulas = 100
+    nb_formulas = 1000
     nb_points = 1000
-    nb_generated = 100
+    nb_generated = 1000
 
     # generate formulas with and without constraints
     # take 1 formula from the constrained ones, use it to
@@ -114,9 +114,7 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
         if len(set(['x', 'y', 'z', 'b']) & syms) == 4:
             try:
                 y = _evaluate_dataset(X, as_str(formula), symbols)
-            except ValueError:
-                continue
-            except ZeroDivisionError:
+            except (ValueError, ZeroDivisionError, OverflowError):
                 continue
             log.info('Held-out formula : ' + as_str(formula))
             break
@@ -205,7 +203,7 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
         syntax_ok[i] = True
         try:
             check_constraints(t)
-        except Exception:
+        except AssertionError:
             continue
         constraints_ok[i] = True
     log.debug('Syntax ok       : {}'.format(sum(syntax_ok)))
@@ -220,9 +218,7 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
             continue
         try:
             y_pred = _evaluate_dataset(X, formula, symbols)
-        except ValueError:
-            continue
-        except ZeroDivisionError:
+        except (ValueError, ZeroDivisionError, OverflowError):
             continue
         mse = ((y_pred - y_true) ** 2).mean()
         r2 = 1.0 - mse / y_true.var()
