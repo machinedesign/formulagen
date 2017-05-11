@@ -170,7 +170,7 @@ def gen_formula_tree(symbols, units, min_depth=1, max_depth=2, unit_constraints=
             return Node(label=val, left=None, right=None, unit=constant_unit)
 
     def _gen_constant():
-        return rng.randint(1, 10)
+        return rng.randint(1, 10)/100.
 
     return _gen(rng)
 
@@ -247,6 +247,16 @@ def as_theano(s, symbols):
     s = 'vars["result"] = ' + s
     exec(s)
     return vars
+
+
+def evaluate(s, symbol_values):
+    from math import sin, cos, tan, exp, log
+    for k, v in symbol_values.items():
+        locals()[k] = v
+    s = 'result = ' + s
+    exec(s)
+    return locals()['result']
+
 
 def as_str(f):
     if f.left and f.right:
