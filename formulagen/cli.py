@@ -79,8 +79,6 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
         3) a dataset of points with their corresponding outputs using a randomly chosen formula
            from the constrained ones
     """
-    import theano
-    import theano.tensor as T
     min_depth = 2
     max_depth = 10
     symbols = ('x', 'y', 'z', 'b')
@@ -172,8 +170,6 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     2) evaluate each generated formula on the dataset 'points'
     3) write the results of the eevaluation on 'out'
     """
-    import theano
-    import theano.tensor as T
     import pandas as pd
     rng = np.random
     log.info('Loading dataset in {}...'.format(formulas))
