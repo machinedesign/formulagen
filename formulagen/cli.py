@@ -4,7 +4,9 @@ import os
 import pickle
 from clize import run
 from uuid import uuid4
+from glob import glob
 
+from scipy.stats import ttest_ind
 import numpy as np
 
 from machinedesign.text.ngram import NGram
@@ -27,6 +29,7 @@ fmt = ''
 logging.basicConfig(format=fmt)
 log = logging.getLogger(__name__)
 log.setLevel('DEBUG')
+
 
 def full():
     """
@@ -70,6 +73,7 @@ def full():
                       out='{}/formulas.csv'.format(out_folder),
                       nb_generated=nb_generated)
     plot(folder=out_folder)
+
 
 def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
     """
@@ -135,15 +139,6 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
     name = os.path.join(folder, 'dataset.npz')
     log.debug('save point to {}'.format(name))
     np.savez(name, X=X, y=y)
-
-def _evaluate_dataset(X, formula, symbols):
-    y = []
-    for x in X:
-        vals = {s: v for v, s in zip(x, symbols)}
-        out = evaluate(formula, vals)
-        y.append(out)
-    y = np.array(y)
-    return y
 
 
 def train(*, data='data/formulas.pkl', out_model='models/model.pkl'):
@@ -242,14 +237,14 @@ def plot(folder='out'):
     df1 = df1.dropna(subset=['mse'])
     df1 = df1.sort_values(by='mse', ascending=False)
     df1['log_mse'] = np.log(1 + df1['mse'])
-    log.info('without constraints : ' + df1['formula'].iloc[-1])
+    
+    #log.info('without constraints : ' + df1['formula'].iloc[-1])
 
     df2 = pd.read_csv(d2, index_col=0)
     df2 = df2.replace([np.inf, -np.inf], np.nan)
     df2 = df2.dropna(subset=['mse'])
     df2 = df2.sort_values(by='mse', ascending=False)
     df2['log_mse'] = np.log(1 + df2['mse'])
-    log.info('with constraints : ' + df2['formula'].iloc[-1])
 
     output_file('{}/scatter.html'.format(folder))
     p = figure(title="evolution of log.MSE with iter")
@@ -267,6 +262,51 @@ def plot(folder='out'):
     output_file('{}/boxplot.html'.format(folder))
     p = BoxPlot(df, values='val', label='type', title="diff between with/without constraints")
     show(p)
+
+
+def global_stats(folder='instances'):
+    df = _read_global(folder)
+    df = df.replace([np.inf, -np.inf], np.nan)
+    df = df.dropna()
+    df['rmse'] = np.sqrt(df['mse'])
+    thresh = 1
+    print('\nTop MSE < {}'.format(thresh))
+    def f(x):
+        return x[x < thresh].mean()
+    #percentage of x<thresh
+    d = df.groupby(['id', 'type']).agg(f).reset_index()
+    print(d.groupby('type').mean())
+    print(d.groupby('type').std())
+    vals = d
+    vals = vals.dropna()
+    c = vals[vals['type']=='with_constraints']['rmse']
+    wc = vals[vals['type'] == 'without_constraints']['rmse']
+    _, pvalue = ttest_ind(c, wc, equal_var=False)
+    print(pvalue)
+
+
+def _read_global(folder):
+    import pandas as pd
+    dfg = []
+    for filename in glob(folder + '/**/out/formulas*.csv'):
+        idx = filename[len(folder)+1:].split('/')[0]
+        t = 'with_constraints' if 'constraints' in filename else 'without_constraints'
+        df = pd.read_csv(filename)
+        d = {'mse': df['mse'], 'type': [t] * len(df), 'id': [idx] * len(df)}
+        d = pd.DataFrame(d)
+        dfg.append(d)
+    dfg = pd.concat(dfg)
+    return dfg
+
+
+def _evaluate_dataset(X, formula, symbols):
+    y = []
+    for x in X:
+        vals = {s: v for v, s in zip(x, symbols)}
+        out = evaluate(formula, vals)
+        y.append(out)
+    y = np.array(y)
+    return y
 
 
 def _fit_model(corpus):
@@ -290,4 +330,4 @@ def _load_model(filename):
 
 
 if __name__ == '__main__':
-    run(full, train, generate_data, generate_formulas, plot)
+    run(full, train, generate_data, generate_formulas, plot, global_stats)

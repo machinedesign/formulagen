@@ -108,7 +108,7 @@ def gen_formula_tree(symbols, units, min_depth=1, max_depth=2, unit_constraints=
             choices = tuple(c for c in choices if c != 'cst')
         action = rng.choice(choices)
         if action == 'op':
-            op = rng.choice(('+', '-', '*', '/'))
+            op = rng.choice(('+', '-', '*'))
             if op in ('+', '-'):
                 if unit_constraints and (force_unit is not None and unit_constraints):
                     lnode = _gen(rng, depth=depth + 1, force_unit=force_unit)
@@ -144,7 +144,7 @@ def gen_formula_tree(symbols, units, min_depth=1, max_depth=2, unit_constraints=
                         unit = lnode.unit // rnode.unit
             return Node(label=op, unit=unit, left=lnode, right=rnode)
         elif action == 'unary_op':
-            choices = ('-', 'exp', 'sin', 'cos', 'tan', 'log')
+            choices = ('-',  'sin', 'cos', 'tan')
             if unit_constraints  and (force_unit is not None and force_unit != constant_unit):
                 choices = ('-',)
                 unit = force_unit
@@ -170,12 +170,13 @@ def gen_formula_tree(symbols, units, min_depth=1, max_depth=2, unit_constraints=
             return Node(label=val, left=None, right=None, unit=constant_unit)
 
     def _gen_constant():
-        return rng.randint(1, 10)/100.
+        return rng.randint(1, 10)/10.
 
     return _gen(rng)
 
 
 constant_unit = Unit() 
+
 
 def check_constraints(node):
     if node.left and node.right:
@@ -192,6 +193,7 @@ def check_constraints(node):
             assert node.left.unit == constant_unit
         assert node.unit == node.left.unit
         check_constraints(node.left)
+
 
 def as_tree(s, units):
     t = parser.parse(s)
