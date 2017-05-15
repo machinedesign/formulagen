@@ -29,24 +29,28 @@ fmt = ''
 logging.basicConfig(format=fmt)
 log = logging.getLogger(__name__)
 log.setLevel('DEBUG')
-
+EPS = 1e-7
 
 def full():
-    """
-    do the full pipeline
-    """
     instance = str(uuid4())
     folder = 'instances/{}'.format(instance)
     os.mkdir(folder)
+    _full(folder=folder, 
+          nb_formulas=1000, 
+          nb_points=1000, 
+          nb_generated=1000)
+
+
+def _full(folder='out', nb_formulas=1000, nb_points=1000, nb_generated=1000):
+    """
+    do the full pipeline
+    """
     data_folder = os.path.join(folder, 'data')
     models_folder = os.path.join(folder, 'models')
     out_folder = os.path.join(folder, 'out')
     os.mkdir(data_folder)
     os.mkdir(models_folder)
     os.mkdir(out_folder)
-    nb_formulas = 1000
-    nb_points = 1000
-    nb_generated = 1000
 
     # generate formulas with and without constraints
     # take 1 formula from the constrained ones, use it to
@@ -73,6 +77,7 @@ def full():
                       out='{}/formulas.csv'.format(out_folder),
                       nb_generated=nb_generated)
     plot(folder=out_folder)
+    clean(folder=folder)
 
 
 def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
@@ -118,6 +123,9 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
                 y = _evaluate_dataset(X, as_str(formula), symbols)
             except (ValueError, ZeroDivisionError, OverflowError):
                 continue
+            else:
+                if y.var() <= EPS:
+                    continue
             log.info('Held-out formula : ' + as_str(formula))
             break
     assert y is not None, 'No suitable formula found to hold out'
@@ -171,6 +179,8 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     dataset = load_dataset(formulas)
     D = np.load(points)
     X, y_true = D['X'], D['y']
+    y_true_ = (y_true - y_true.mean()) / y_true.std()
+
     data = dataset['data']
     units = dataset['units']
     symbols = dataset['symbols']
@@ -211,8 +221,9 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
             y_pred = _evaluate_dataset(X, formula, symbols)
         except (ValueError, ZeroDivisionError, OverflowError):
             continue
-        mse = ((y_pred - y_true) ** 2).mean()
-        r2 = 1.0 - mse / y_true.var()
+        y_pred_ = (y_pred - y_pred.mean()) / y_pred.std()
+        mse = ((y_pred_ - y_true_) ** 2).mean()
+        r2 = 1.0 - mse / y_true_.var()
         df.append({'mse': mse, 'r2': r2, 'formula': formula})
     
     df = pd.DataFrame(df)
@@ -238,8 +249,6 @@ def plot(folder='out'):
     df1 = df1.sort_values(by='mse', ascending=False)
     df1['log_mse'] = np.log(1 + df1['mse'])
     
-    #log.info('without constraints : ' + df1['formula'].iloc[-1])
-
     df2 = pd.read_csv(d2, index_col=0)
     df2 = df2.replace([np.inf, -np.inf], np.nan)
     df2 = df2.dropna(subset=['mse'])
@@ -264,7 +273,7 @@ def plot(folder='out'):
     show(p)
 
 
-def global_stats(folder='instances'):
+def global_stats(*, folder='instances'):
     df = _read_global(folder)
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna()
@@ -273,12 +282,10 @@ def global_stats(folder='instances'):
     print('\nTop MSE < {}'.format(thresh))
     def f(x):
         return x[x < thresh].mean()
-    #percentage of x<thresh
     d = df.groupby(['id', 'type']).agg(f).reset_index()
     print(d.groupby('type').mean())
     print(d.groupby('type').std())
-    vals = d
-    vals = vals.dropna()
+    vals = d.dropna()
     c = vals[vals['type']=='with_constraints']['rmse']
     wc = vals[vals['type'] == 'without_constraints']['rmse']
     _, pvalue = ttest_ind(c, wc, equal_var=False)
@@ -297,6 +304,13 @@ def _read_global(folder):
         dfg.append(d)
     dfg = pd.concat(dfg)
     return dfg
+
+
+def clean(folder):
+    for filename in glob(os.path.join(folder, 'data', '*.pkl')):
+        os.remove(filename)
+    for filename in glob(os.path.join(folder, 'models', '*.pkl')):
+        os.remove(filename)
 
 
 def _evaluate_dataset(X, formula, symbols):

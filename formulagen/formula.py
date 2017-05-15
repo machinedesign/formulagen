@@ -108,7 +108,7 @@ def gen_formula_tree(symbols, units, min_depth=1, max_depth=2, unit_constraints=
             choices = tuple(c for c in choices if c != 'cst')
         action = rng.choice(choices)
         if action == 'op':
-            op = rng.choice(('+', '-', '*'))
+            op = rng.choice(('+', '-', '*', '/'))
             if op in ('+', '-'):
                 if unit_constraints and (force_unit is not None and unit_constraints):
                     lnode = _gen(rng, depth=depth + 1, force_unit=force_unit)
@@ -228,6 +228,7 @@ def as_tree(s, units):
             raise ValueError('nb of children must be 1 or 2')
     return _as_tree(t)
 
+
 def get_symbols(t):
     if t.left and t.right:
         return get_symbols(t.left) | get_symbols(t.right)
@@ -235,20 +236,6 @@ def get_symbols(t):
         return get_symbols(t.left)
     else:
         return set([t.label])
-
-
-def as_theano(s, symbols):
-    import theano.tensor as T
-    import theano
-    vars = {s: T.fvector(name=s) for s in symbols}
-    for sym in symbols:
-        locals()[sym] = vars[sym]
-    ops = ['sin', 'cos', 'tan', 'log', 'exp']
-    for op in ops:
-        s = s.replace(op, 'T.' + op)
-    s = 'vars["result"] = ' + s
-    exec(s)
-    return vars
 
 
 def evaluate(s, symbol_values):
@@ -300,6 +287,3 @@ def load_dataset(filename):
     with open(filename, 'rb') as fd:
         content = pickle.load(fd)
     return content
-
-if __name__ == '__main__':
-    print(as_theano('log(x+1+y)', ('x', 'y')))
