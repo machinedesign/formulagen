@@ -8,6 +8,7 @@ from glob import glob
 
 from scipy.stats import ttest_ind
 import numpy as np
+import pandas as pd
 
 from machinedesign.text.ngram import NGram
 
@@ -25,6 +26,7 @@ from formulagen.formula import as_str
 from formulagen.formula import ParseError
 from formulagen.formula import evaluate
 
+
 fmt = ''
 logging.basicConfig(format=fmt)
 log = logging.getLogger(__name__)
@@ -38,12 +40,14 @@ def full():
     _full(folder=folder, 
           nb_formulas=1000, 
           nb_points=1000, 
-          nb_generated=1000)
+          nb_generated=1000,
+          nb_iterations=10,
+          keep=0.5)
 
 
-def _full(folder='out', nb_formulas=1000, nb_points=1000, nb_generated=1000):
+def _full(folder='out', nb_formulas=1000, nb_points=1000, nb_generated=1000, nb_iterations=1, keep=0.5):
     """
-    do the full pipeline
+    do the full pipeline once
     """
     data_folder = os.path.join(folder, 'data')
     models_folder = os.path.join(folder, 'models')
@@ -68,14 +72,18 @@ def _full(folder='out', nb_formulas=1000, nb_points=1000, nb_generated=1000):
                       formulas='{}/formulas_constraints.pkl'.format(data_folder), 
                       model='{}/formulas_constraints.pkl'.format(models_folder), 
                       out='{}/formulas_constraints.csv'.format(out_folder),
-                      nb_generated=nb_generated)
+                      nb_generated=nb_generated,
+                      nb_iterations=nb_iterations,
+                      keep=keep)
     # generate formulas from the model trained on constrained formulas and evaluate
     # on the numerical dataset
     generate_formulas(points='{}/dataset.npz'.format(data_folder), 
                       formulas='{}/formulas.pkl'.format(data_folder), 
                       model='{}/formulas.pkl'.format(models_folder), 
                       out='{}/formulas.csv'.format(out_folder),
-                      nb_generated=nb_generated)
+                      nb_generated=nb_generated,
+                      nb_iterations=nb_iterations,
+                      keep=keep)
     plot(folder=out_folder)
     clean(folder=folder)
 
@@ -123,9 +131,8 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
                 y = _evaluate_dataset(X, as_str(formula), symbols)
             except (ValueError, ZeroDivisionError, OverflowError):
                 continue
-            else:
-                if y.var() <= EPS:
-                    continue
+            if not _is_valid_output(y):
+                continue
             log.info('Held-out formula : ' + as_str(formula))
             break
     assert y is not None, 'No suitable formula found to hold out'
@@ -167,15 +174,15 @@ def train(*, data='data/formulas.pkl', out_model='models/model.pkl'):
 
 def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl', 
                       model='models/model.pkl', out='out/formulas.csv',
-                      nb_generated=1000):
+                      nb_generated=1000, nb_iterations=1, keep=0.5):
     """
     1) generate a set of formulas from a generator 'model' trained on the dataset 'formulas'
     2) evaluate each generated formula on the dataset 'points'
     3) write the results of the eevaluation on 'out'
     """
-    import pandas as pd
     rng = np.random
     log.info('Loading dataset in {}...'.format(formulas))
+
     dataset = load_dataset(formulas)
     D = np.load(points)
     X, y_true = D['X'], D['y']
@@ -186,48 +193,69 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     symbols = dataset['symbols']
     data_str = list(map(as_str, data))
  
-    log.info('Generate...')
     max_size = max(map(len, data_str))
     model = _load_model(model)
-    G = [model.generate(rng, max_size=max_size) for _ in range(nb_generated)]
-    G = list(set(G))
-    total = len(G)
-    syntax_ok = [False] * len(G)
-    constraints_ok = [False] * len(G)
-    for i, s in enumerate(G):
-        if s is None:
-            continue
-        try:
-            t = as_tree(s, units)
-        except ParseError:
-            continue
-        syntax_ok[i] = True
-        try:
-            check_constraints(t)
-        except AssertionError:
-            continue
-        constraints_ok[i] = True
-    log.debug('Syntax ok       : {}'.format(sum(syntax_ok)))
-    log.debug('Constraints ok  : {}'.format(sum(constraints_ok)))
-    log.debug('Total unique    : {}'.format(total))
-    log.debug('Total generated : {}'.format(nb_generated))
+    log.info('Optimize...')
+    cur_model = model
+    for i in range(nb_iterations):
+        log.info('Generate...')
+        G = [cur_model.generate(rng, max_size=max_size) for _ in range(nb_generated)]
+        G = filter(_not_none, G)
+        G = filter(partial(_syntax_ok, units=units), G)
+        G = list(G)
+        log.info('Eval...')
+        df = _evaluate_formulas(G, X, y_true_, symbols)
+        df = df[df['is_valid']]
+        print(df['mse'].mean())
+        df.to_csv(out + '_it{:03d}'.format(i))
+        df = df.sort_values(by='mse')
+        df = df.iloc[0:int(keep * len(df))]
+        G = df['formula']
+        cur_model = _fit_model(G)
+    df.to_csv(out)
 
-    log.info('Regress...')
+
+def _evaluate_formulas(G, X, y_true_, symbols):
     df = []
     for i, formula in enumerate(G):
-        if not syntax_ok[i]:
-            continue
+        
         try:
             y_pred = _evaluate_dataset(X, formula, symbols)
-        except (ValueError, ZeroDivisionError, OverflowError):
+        except (ValueError, ZeroDivisionError, OverflowError, AssertionError) as exc:
+            df.append({'error': str(exc), 'formula': formula, 'is_valid': False})
             continue
+
+        if not _is_valid_output(y_pred):
+            df.append({'error': 'output_not_valid', 'formula': formula, 'is_valid': False})
+            continue
+
         y_pred_ = (y_pred - y_pred.mean()) / y_pred.std()
         mse = ((y_pred_ - y_true_) ** 2).mean()
         r2 = 1.0 - mse / y_true_.var()
-        df.append({'mse': mse, 'r2': r2, 'formula': formula})
-    
+        df.append({'mse': mse, 'r2': r2, 'formula': formula, 'error': '', 'is_valid': True})
     df = pd.DataFrame(df)
-    df.to_csv(out)
+    return df
+
+
+_not_none = lambda x:x is not None
+
+def _syntax_ok(s, units):
+    try:
+        t = as_tree(s, units=units)
+    except ParseError:
+        return False
+    else:
+        return True
+
+
+def _as_tree_or_none(s, *args, **kwargs):
+    try:
+        t = as_tree(s, *args, **kwargs)
+    except ParseError:
+        return None
+    else:
+        return t
+
 
 
 def plot(folder='out'):
@@ -278,11 +306,13 @@ def global_stats(*, folder='instances'):
     df = df.replace([np.inf, -np.inf], np.nan)
     df = df.dropna()
     df['rmse'] = np.sqrt(df['mse'])
+    print('Total Nb of models : {}'.format(len(df)))
     thresh = 1
     print('\nTop MSE < {}'.format(thresh))
     def f(x):
         return x[x < thresh].mean()
     d = df.groupby(['id', 'type']).agg(f).reset_index()
+    print('Total Nb of repetitions : {}'.format(len(df['id'].unique())))
     print(d.groupby('type').mean())
     print(d.groupby('type').std())
     vals = d.dropna()
@@ -290,6 +320,7 @@ def global_stats(*, folder='instances'):
     wc = vals[vals['type'] == 'without_constraints']['rmse']
     _, pvalue = ttest_ind(c, wc, equal_var=False)
     print(pvalue)
+    # count nb of duplicates
 
 
 def _read_global(folder):
@@ -313,6 +344,7 @@ def clean(folder):
         os.remove(filename)
 
 
+
 def _evaluate_dataset(X, formula, symbols):
     y = []
     for x in X:
@@ -326,7 +358,7 @@ def _evaluate_dataset(X, formula, symbols):
 def _fit_model(corpus):
     min_gram = 1
     max_gram = 10
-    model = NGram(min_gram=min_gram, max_gram=max_gram, begin='^', end='$')
+    model = NGram(min_gram=min_gram, max_gram=max_gram)
     log.info('fitting model...')
     model.fit(corpus)
     return model
@@ -341,6 +373,16 @@ def _load_model(filename):
     with open(filename, 'rb') as fd:
         model = pickle.load(fd)
     return model
+
+
+def _is_valid_output(y):
+    if np.any(np.isinf(y)):
+        return False
+    if np.any(np.isnan(y)):
+        return False
+    if y.var() <= EPS:
+        return False
+    return True
 
 
 if __name__ == '__main__':

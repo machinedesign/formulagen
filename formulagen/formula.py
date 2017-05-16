@@ -195,7 +195,7 @@ def check_constraints(node):
         check_constraints(node.left)
 
 
-def as_tree(s, units):
+def as_tree(s, units={}):
     t = parser.parse(s)
     def _as_tree(t):
         if isinstance(t, Token):
@@ -249,13 +249,12 @@ def evaluate(s, symbol_values):
 
 def as_str(f):
     if f.left and f.right:
-        s = as_str(f.left) + f.label + as_str(f.right)
-        s = '(' + s + ')'
-        return s
+        return '(' + as_str(f.left) + f.label + as_str(f.right) + ')'
     elif f.left:
         if f.label == '-':
             return '(' + f.label + '(' + as_str(f.left) + '))'
-        return f.label + '(' + as_str(f.left) + ')'
+        else:
+            return f.label + '(' + as_str(f.left) + ')'
     else:
         return str(f.label)
 
