@@ -59,36 +59,27 @@ def _full(folder='out', nb_formulas=1000, nb_points=1000, nb_generated=1000, nb_
     os.mkdir(data_folder)
     os.mkdir(models_folder)
     os.mkdir(out_folder)
-
-    # generate formulas with and without constraints
-    # take 1 formula from the constrained ones, use it to
-    # generate a numerical dataset
     generate_data(folder=data_folder, nb_formulas=nb_formulas, nb_points=nb_points)
-    # train a generator on formulas
     train(data='{}/formulas.pkl'.format(data_folder), 
           out_model='{}/formulas.pkl'.format(models_folder))
-    # train a generator on constrained formulas
     train(data='{}/formulas_constraints.pkl'.format(data_folder), 
           out_model='{}/formulas_constraints.pkl'.format(models_folder))
-    # generate formulas from the model trained on unconstrained formulas and and evaluate 
-    # on the numerical dataset
-    generate_formulas(points='{}/dataset.npz'.format(data_folder), 
+    optimize_formulas(points='{}/dataset.npz'.format(data_folder), 
+                      points_test='{}/test.npz'.format(data_folder),
                       formulas='{}/formulas_constraints.pkl'.format(data_folder), 
                       model='{}/formulas_constraints.pkl'.format(models_folder), 
                       out='{}/formulas_constraints.csv'.format(out_folder),
                       nb_generated=nb_generated,
                       nb_iterations=nb_iterations,
                       algo=algo)
-    # generate formulas from the model trained on constrained formulas and evaluate
-    # on the numerical dataset
-    generate_formulas(points='{}/dataset.npz'.format(data_folder), 
+    optimize_formulas(points='{}/dataset.npz'.format(data_folder),
+                      points_test='{}/test.npz'.format(data_folder),
                       formulas='{}/formulas.pkl'.format(data_folder), 
                       model='{}/formulas.pkl'.format(models_folder), 
                       out='{}/formulas.csv'.format(out_folder),
                       nb_generated=nb_generated,
                       nb_iterations=nb_iterations,
                       algo=algo)
-    plot(folder=out_folder)
     clean(folder=folder)
 
 
@@ -123,17 +114,12 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
 
     # generate points from one formula taken from the constrained formulas
     log.info('Generate points from the held-out formula...')
-    X = np.random.uniform(0, 1, size=(nb_points * 2, len(symbols)))
+    X = np.random.uniform(0, 1, size=(nb_points * 2, len(symbols)))#train/test
     X = X.astype(np.float32)
 
     # take one formula and use it as a held-out formula
     y = None
     for i, formula in enumerate(data):
-        #syms = get_symbols(formula)
-        #if len(set(symbols) - syms) > 0:
-        #    continue
-        #if len(syms) != len(symbols):
-        #    continue
         try:
             y = _evaluate_dataset(X, as_str(formula), symbols)
         except (ValueError, ZeroDivisionError, OverflowError):
@@ -170,7 +156,6 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
 
 
 
-
 def train(*, data='data/formulas.pkl', out_model='models/model.pkl'):
     """
     train a formula generator on the dataset 'data' and save the model
@@ -187,7 +172,7 @@ def train(*, data='data/formulas.pkl', out_model='models/model.pkl'):
     _save_model(model, out_model)
 
 
-def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl', 
+def optimize_formulas(*, points='data/dataset.npz', points_test='data/test.npz', formulas='data/formulas.pkl', 
                       model='models/model.pkl', out='out/formulas.csv',
                       nb_generated=1000, nb_iterations=1,
                       algo='eda'):
@@ -202,6 +187,10 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     dataset = load_dataset(formulas)
     D = np.load(points)
     X, y_true = D['X'], D['y']
+    mean = y_true.mean()
+    sigma = y_true.std()
+    Dt = np.load(points_test)
+    X_test, y_test = Dt['X'], Dt['y']
 
     data = dataset['data']
     units = dataset['units']
@@ -221,11 +210,10 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     
     # types of optimizations
 
-
     def onestep():
         G = sample_valid_formulas(nb_generated, model)
         G = _drop_duplicates(G)
-        df = _evaluate_formulas(G, X, y_true, symbols)
+        df = _evaluate_formulas(G, X, y_true, mean, sigma, symbols)
         df = df[df['is_valid']]
         return df
     
@@ -236,7 +224,7 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
             log.info('Eval...')
             G = sample_valid_formulas(nb_generated, model)
             G = _drop_duplicates(G)
-            df = _evaluate_formulas(G, X, y_true, symbols)
+            df = _evaluate_formulas(G, X, y_true, mean, sigma, symbols)
             df = df[df['is_valid']]
             df.to_csv(out + '_it{:03d}'.format(i))
             G = df['formula'].values.tolist()
@@ -250,7 +238,7 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
     def eda(warm_start=False):
         cur_model = model
         if warm_start:
-            df = _evaluate_formulas(data_str, X, y_true, symbols)
+            df = _evaluate_formulas(data_str, X, y_true, mean, sigma, symbols)
             df = df[df['is_valid']]
             best = df['formula'].values.tolist()
             best_vals = df['mse'].values.tolist()
@@ -261,7 +249,7 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
             log.info('Eval...')
             G = sample_valid_formulas(nb_generated, cur_model)
             G = _drop_duplicates(G)
-            df = _evaluate_formulas(G, X, y_true, symbols)
+            df = _evaluate_formulas(G, X, y_true, mean, sigma, symbols)
             df = df[df['is_valid']]
             df.to_csv(out + '_it{:03d}'.format(i))
             df = df.sort_values(by='mse')
@@ -290,20 +278,17 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
 
 
     def eda_weights():
-        cur_model = model
-        all = []
-        all_vals = []
-
-        df = _evaluate_formulas(data_str, X, y_true, symbols)
+        df = _evaluate_formulas(data_str, X, y_true, mean, sigma, symbols)
         df = df[df['is_valid']]
         all = df['formula'].values.tolist()
         all_vals = df['mse'].values.tolist()
+        cur_model = model
 
         for i in range(nb_iterations):
             log.info('Eval...')
             G = sample_valid_formulas(nb_generated, cur_model)
             G = _drop_duplicates(G)
-            df = _evaluate_formulas(G, X, y_true, symbols)
+            df = _evaluate_formulas(G, X, y_true, mean, sigma, symbols)
             df = df[df['is_valid']]
             df.to_csv(out + '_it{:03d}'.format(i))
             G = df['formula'].values.tolist()
@@ -337,42 +322,26 @@ def generate_formulas(*, points='data/dataset.npz', formulas='data/formulas.pkl'
         df = one_step()
     elif algo == 'bayesopt':
         df = bayesopt()
-
     print(df['mse'].min())
+    G = df['formula'].values.tolist()
+    df_test = _evaluate_formulas(G, X_test, y_test, mean, sigma, symbols)
+    df['mse_test'] = df_test['mse']
     df.to_csv(out)
 
-def _is_dup(G):
-    s = set()
-    d = []
-    for g in G:
-        if g in s:
-            d.append(True)
-        else:
-            d.append(False)
-            s.add(g)
-    return d
 
-
-def _drop_duplicates(G):
-    return list(set(G))
-
-
-def _evaluate_formulas(G, X, y_true, symbols):
-    y_true_ = (y_true - y_true.mean()) / y_true.std()
+def _evaluate_formulas(G, X, y_true, mean, sigma, symbols):
+    y_true_ = (y_true - mean) / sigma
     df = []
     for i, formula in enumerate(G):
-        
         try:
             y_pred = _evaluate_dataset(X, formula, symbols)
         except (ValueError, ZeroDivisionError, OverflowError, AssertionError) as exc:
             df.append({'error': str(exc), 'formula': formula, 'is_valid': False})
             continue
-
         if not _is_valid_output(y_pred):
             df.append({'error': 'output_not_valid', 'formula': formula, 'is_valid': False})
             continue
-
-        y_pred_ = (y_pred - y_pred.mean()) / y_pred.std()
+        y_pred_ = (y_pred - mean) / sigma
         mse = ((y_pred_ - y_true_) ** 2).mean()
         df.append({'mse': mse, 'formula': formula, 'error': '', 'is_valid': True})
     df = pd.DataFrame(df)
@@ -397,6 +366,22 @@ def _as_tree_or_none(s, *args, **kwargs):
         return None
     else:
         return t
+
+
+def _is_dup(G):
+    s = set()
+    d = []
+    for g in G:
+        if g in s:
+            d.append(True)
+        else:
+            d.append(False)
+            s.add(g)
+    return d
+
+
+def _drop_duplicates(G):
+    return list(set(G))
 
 
 
@@ -444,36 +429,18 @@ def plot(*, folder='out'):
     show(p)
 
 
-def generate_heldout_points(*, folder='instances'):
-    nb_points = 1000
-    symbols = ('x', 'y', 'z', 'b')
-    for f in os.listdir(folder):
-        name = os.path.join(folder, f, 'data', 'held_out')
-        out_name = os.path.join(folder, f, 'data', 'test.npz')
-        if os.path.exists(out_name):
-            continue
-        if not os.path.exists(name):
-            continue
-        formula = open(name).read()
-        X = np.random.uniform(0, 1, size=(nb_points, len(symbols)))
-        X = X.astype(np.float32)
-        y = _evaluate_dataset(X, formula, symbols)
-        np.savez(out_name, X=X, y=y)
-
 def global_heldout_eval(*, folder='instances'):
     symbols = ('x', 'y', 'z', 'b')
     for f in os.listdir(folder):
         dataf = os.path.join(folder, f, 'data')
         outf = os.path.join(folder, f, 'out')
         name = os.path.join(folder, f, 'data', 'held_out')
-
         if not os.path.exists(name):
             continue
         if not os.path.exists(os.path.join(outf, 'formulas.csv')):
             continue
         if not os.path.exists(os.path.join(outf, 'formulas_constraints.csv')):
             continue
-        
         formula = open(name).read()
         data = np.load(os.path.join(dataf, 'dataset.npz'))
         data_test = np.load(os.path.join(dataf, 'test.npz'))
@@ -483,7 +450,7 @@ def global_heldout_eval(*, folder='instances'):
         y_test = data_test['y']
         m, s = y_train.mean(), y_train.std()
         y_train = (y_train - m) / s
-        y_test = (y_test - y_test.mean()) / y_test.std()
+        y_test = (y_test - m) / s
 
         c = pd.read_csv(os.path.join(outf, 'formulas_constraints.csv'))
         wc =  pd.read_csv(os.path.join(outf, 'formulas.csv'))
@@ -495,27 +462,6 @@ def global_heldout_eval(*, folder='instances'):
         c_mse = ((v - y_train) ** 2).mean()
 
 
-def _get_curves(folder):
-    m1s = []
-    m2s = []
-    for i in range(100):
-        d1 = '{}/formulas.csv_it{:03d}'.format(folder, i)
-        d2 = '{}/formulas_constraints.csv_it{:03d}'.format(folder, i)
-        if not os.path.exists(d1):
-            continue
-        if not os.path.exists(d2):
-            continue
-        df1 = pd.read_csv(d1, index_col=0)
-        df2 = pd.read_csv(d2, index_col=0)
-        m1 = df1['mse'].min()
-        m2 = df2['mse'].min()
-        m1s.append(m1)
-        m2s.append(m2)
-    m1s = np.array(m1s)
-    m2s = np.array(m2s)
-    m1s = np.minimum.accumulate(m1s)
-    m2s = np.minimum.accumulate(m2s)
-    return m1s, m2s
 
 
 def global_plots(*, folder='instances'):
@@ -523,11 +469,7 @@ def global_plots(*, folder='instances'):
     mpl.use('Agg')
     import matplotlib.pyplot as plt
     import pandas as pd
-    from bokeh.plotting import figure, output_file, show
-    from bokeh.charts import Histogram, Bar, BoxPlot
-    from bokeh.layouts import row
     import seaborn as sns
-    output_file('{}/iter_global.html'.format(folder))
     p = figure(title="evolution of MSE with iter")
     m1 = []
     m2 = []
@@ -545,9 +487,6 @@ def global_plots(*, folder='instances'):
     u_m2 = np.mean(m2, axis=0)
     s_m1 = np.std(m1, axis=0)
     s_m2 = np.std(m2, axis=0)
-    p.line(np.arange(len(u_m1)), u_m1, line_width=2, legend='without constraints', color='blue')
-    p.line(np.arange(len(u_m2)), u_m2, line_width=2, legend='with constraints', color='red')
-    show(p) 
     fig = plt.figure()
     ax = sns.tsplot(m1, time=np.arange(1, nb_iter + 1), color='blue')
     ax = sns.tsplot(m2, time=np.arange(1, nb_iter + 1), color='red')
@@ -763,7 +702,6 @@ def _fit_model(corpus):
     min_gram = 1
     max_gram = 10
     model = NGram(min_gram=min_gram, max_gram=max_gram)
-    #model = TreeGram(min_gram=min_gram, max_gram=max_gram)
     log.info('fitting model...')
     model.fit(corpus)
     return model
@@ -790,7 +728,35 @@ def _is_valid_output(y):
     return True
 
 
+def _get_curves(folder):
+    m1s = []
+    m2s = []
+    for i in range(100):
+        d1 = '{}/formulas.csv_it{:03d}'.format(folder, i)
+        d2 = '{}/formulas_constraints.csv_it{:03d}'.format(folder, i)
+        if not os.path.exists(d1):
+            continue
+        if not os.path.exists(d2):
+            continue
+        df1 = pd.read_csv(d1, index_col=0)
+        df2 = pd.read_csv(d2, index_col=0)
+        m1 = df1['mse'].min()
+        m2 = df2['mse'].min()
+        m1s.append(m1)
+        m2s.append(m2)
+    m1s = np.array(m1s)
+    m2s = np.array(m2s)
+    m1s = np.minimum.accumulate(m1s)
+    m2s = np.minimum.accumulate(m2s)
+    return m1s, m2s
+
 
 
 if __name__ == '__main__':
-    run(full, train, generate_data, generate_formulas, plot, global_stats, global_plots, global_fit_numerical_data, global_compare, print_heldout, generate_heldout_points, global_heldout_eval)
+    run(full,  
+        global_stats, 
+        global_plots, 
+        global_fit_numerical_data, 
+        global_compare, 
+        global_heldout_eval,
+        print_heldout,)
