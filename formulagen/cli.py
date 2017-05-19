@@ -167,7 +167,7 @@ def train(*, data='data/formulas.pkl', out_model='models/model.pkl'):
     units = dataset['units']
     symbols = dataset['symbols']
     data_str = list(map(as_str, data))
-    model = _fit_model(data_str)
+    model = _fit_generative_model(data_str)
     log.info('Save model to {}'.format(out_model))
     _save_model(model, out_model)
 
@@ -272,7 +272,7 @@ def optimize_formulas(*, points='data/dataset.npz', points_test='data/test.npz',
             for b in best[0:10]:
                 print(b)
             # fit a new model using best
-            cur_model = _fit_model(best)
+            cur_model = _fit_generative_model(best)
         df = pd.DataFrame({'formula': best, 'mse': best_vals})
         return df
 
@@ -306,9 +306,11 @@ def optimize_formulas(*, points='data/dataset.npz', points_test='data/test.npz',
             inds = np.random.multinomial(1, pr, size=nb_generated).argmax(axis=1)
             best = [all[i] for i in inds]
             # fit a new model using best
-            cur_model = _fit_model(best)
+            cur_model = _fit_generative_model(best)
         df = pd.DataFrame({'formula': all, 'mse': all_vals})
         return df
+
+
 
     if algo == 'eda':
         df = eda()
@@ -421,47 +423,13 @@ def plot(*, folder='out'):
     p = BoxPlot(df, values='val', label='type', title="diff between with/without constraints")
     show(p)
     
-    m1s, m2s = _get_curves(folder)
+    mse_c = _get_mse_per_iteration(os.path.join(folder, 'formulas_constraints.csv'))
+    mse_wc = _get_mse_per_iteration(os.path.join(folder, 'formulas.csv'))
     output_file('{}/iter.html'.format(folder))
     p = figure(title="evolution of MSE with iter")
-    p.line(np.arange(len(m1s)), m1s, legend="without constraints", line_width=2, color='blue')
-    p.line(np.arange(len(m2s)), m2s, legend="with constraints", line_width=2, color='red')
+    p.line(np.arange(len(mse_c)),  mse_c,  legend="with constraints",  line_width=2, color='red')
+    p.line(np.arange(len(mse_wc)), mse_wc, legend="without constraints", line_width=2, color='blue')
     show(p)
-
-
-def global_heldout_eval(*, folder='instances'):
-    symbols = ('x', 'y', 'z', 'b')
-    for f in os.listdir(folder):
-        dataf = os.path.join(folder, f, 'data')
-        outf = os.path.join(folder, f, 'out')
-        name = os.path.join(folder, f, 'data', 'held_out')
-        if not os.path.exists(name):
-            continue
-        if not os.path.exists(os.path.join(outf, 'formulas.csv')):
-            continue
-        if not os.path.exists(os.path.join(outf, 'formulas_constraints.csv')):
-            continue
-        formula = open(name).read()
-        data = np.load(os.path.join(dataf, 'dataset.npz'))
-        data_test = np.load(os.path.join(dataf, 'test.npz'))
-        X_train = data['X']
-        y_train = data['y']
-        X_test = data_test['X']
-        y_test = data_test['y']
-        m, s = y_train.mean(), y_train.std()
-        y_train = (y_train - m) / s
-        y_test = (y_test - m) / s
-
-        c = pd.read_csv(os.path.join(outf, 'formulas_constraints.csv'))
-        wc =  pd.read_csv(os.path.join(outf, 'formulas.csv'))
-        
-        fc = c.sort_values(by='mse').iloc[0]
-        fwc = wc.sort_values(by='mse').iloc[0]
-        v = _evaluate_dataset(X_train, fc['formula'], symbols)
-        v = (v - v.mean()) / v.std()
-        c_mse = ((v - y_train) ** 2).mean()
-
-
 
 
 def global_plots(*, folder='instances'):
@@ -470,27 +438,27 @@ def global_plots(*, folder='instances'):
     import matplotlib.pyplot as plt
     import pandas as pd
     import seaborn as sns
-    p = figure(title="evolution of MSE with iter")
-    m1 = []
-    m2 = []
+    c_mse_list   = []
+    wc_mse_list  = []
     nb_iter = 30
     for i, instance in enumerate(os.listdir(folder)):
-        f = os.path.join(folder, instance, 'out')
-        m1s, m2s = _get_curves(f)
-        if not(len(m1s) == nb_iter and len(m2s) == nb_iter):
+        filename_c = os.path.join(folder, instance, 'out', 'formulas_constraints.csv')
+        filename_wc = os.path.join(folder, instance, 'out', 'formulas.csv')
+        if not os.path.exists(filename_c) or not os.path.exists(filename_wc):
             continue
-        m1.append(m1s)
-        m2.append(m2s)
-    m1 = np.array(m1)
-    m2  = np.array(m2)
-    u_m1 = np.mean(m1, axis=0)
-    u_m2 = np.mean(m2, axis=0)
-    s_m1 = np.std(m1, axis=0)
-    s_m2 = np.std(m2, axis=0)
+        mse_c = _get_mse_per_iteration(filename_c, label='mse')
+        mse_wc = _get_mse_per_iteration(filename_wc, label='mse')
+        if not(len(mse_c) == nb_iter and len(mse_wc) == nb_iter):
+            continue
+ 
+        c_mse_list.append(mse_c)
+        wc_mse_list.append(mse_wc)
+    c_mse_arr = np.array(c_mse_list)
+    wc_mse_arr  = np.array(wc_mse_list)
     fig = plt.figure()
-    ax = sns.tsplot(m1, time=np.arange(1, nb_iter + 1), color='blue')
-    ax = sns.tsplot(m2, time=np.arange(1, nb_iter + 1), color='red')
-    ax.legend(["without constraints", "with constraints"])
+    ax = sns.tsplot(c_mse_arr,  time=np.arange(1, nb_iter + 1), color='red')
+    ax = sns.tsplot(wc_mse_arr, time=np.arange(1, nb_iter + 1), color='blue')
+    ax.legend(["with constraints", "without constraints"])
     plt.xlabel('Iteration')
     plt.ylabel('Normalized MSE')
     plt.savefig('{}/iter_global.png'.format(folder))
@@ -502,8 +470,6 @@ def global_fit_numerical_data(*, folder='instances', model_type='neuralnet'):
         print(f)
         dataf = os.path.join(folder, f, 'data')
         outf = os.path.join(folder, f, 'out')
-        #if os.path.exists(os.path.join(outf, 'neuralnet.csv')):
-        #    continue
         if not os.path.exists(os.path.join(outf, 'formulas.csv')):
             continue
         if not os.path.exists(os.path.join(outf, 'formulas_constraints.csv')):
@@ -513,10 +479,6 @@ def global_fit_numerical_data(*, folder='instances', model_type='neuralnet'):
 
 
 def _fit_numerical_data(*, folder='data', out='out', model_type='neuralnet'):
-    df_c = pd.read_csv(os.path.join(out, 'formulas_constraints.csv'))
-    df_wc = pd.read_csv(os.path.join(out, 'formulas.csv'))
-    print('with constraints    : {:.6f}'.format(df_c['mse'].min()))
-    print('without constraints : {:.6f}'.format(df_wc['mse'].min()))
     formula = open(os.path.join(folder, 'held_out')).read()
     formula_t = as_tree(formula)
     
@@ -540,11 +502,10 @@ def _fit_numerical_data(*, folder='data', out='out', model_type='neuralnet'):
     train_mse  = ((y_pred_train - y_train) ** 2).mean()
     test_mse = ((y_pred_test - y_test) ** 2).mean()
     print('Train MSE : {:.6f} Test MSE : {:.6f}'.format(train_mse, test_mse))
-    mse= []
+    mse = []
     mse.append({'train': train_mse, 'test': test_mse})
     mse = pd.DataFrame(mse)
     mse.to_csv(os.path.join(out, '{}.csv'.format(model_type)))
-    print(mse.mean())
 
 
 
@@ -582,6 +543,7 @@ def _fit_genetic(X, y, folder='.'):
         generations=30,
         const_range=(0.0, 1.0),
         metric='mse',
+        n_jobs=-1,
         verbose=1
     )
     reg.fit(X, y)
@@ -595,10 +557,7 @@ def global_stats(*, folder='instances'):
     df['rmse'] = np.sqrt(df['mse'])
     thresh = 1
     print('\nTop MSE < {}'.format(thresh))
-    def f(x):
-        return x.min()
-        #return x[x < thresh].mean()
-    d = df.groupby(['id', 'type']).agg(f).reset_index()
+    d = df.groupby(['id', 'type']).min().reset_index()
     print('Total Nb of repetitions : {}'.format(len(df['id'].unique())))
     print(d.groupby('type').mean())
     print(d.groupby('type').std())
@@ -615,7 +574,11 @@ def global_stats(*, folder='instances'):
     diff = c['rmse'] - wc['rmse']
     print('Diff mean {} std {}'.format(diff.mean(), diff.std()))
     print('ratio of c<wc : {}'.format((c<wc).mean()['rmse']))
-    # count nb of duplicates
+
+    d = df.groupby('id').min().sort_values(by='mse')
+    pd.set_option('max_colwidth',200)
+    print(d.iloc[0:20].reset_index()[['id']])
+
 
 
 def _read_global(folder):
@@ -631,7 +594,9 @@ def _read_global(folder):
         idx = instance
         for filename, t in ((f1, 'without_constraints'), (f2, 'with_constraints')):
             df = pd.read_csv(filename)
-            d = {'mse': df['mse'], 'type': [t] * len(df), 'id': [idx] * len(df)}
+            d = {'mse': df['mse'], 'type': [t] * len(df), 'id': [idx] * len(df), 'formula': df['formula']}
+            if 'mse_test' in df.columns:
+                d['mse_test'] = df['mse_test']
             d = pd.DataFrame(d)
             dfg.append(d)
     dfg = pd.concat(dfg)
@@ -662,16 +627,17 @@ def global_compare(*, folder='instances', model_type='neuralnet'):
         df = pd.read_csv(filename)
         df_c = pd.read_csv(os.path.join(outf, 'formulas_constraints.csv'))
         df_wc = pd.read_csv(os.path.join(outf, 'formulas.csv'))
-        print('with constraints    : {:.6f}'.format(df_c['mse'].min()))
-        print('without constraints : {:.6f}'.format(df_wc['mse'].min()))
-        print('Neural net          : {:.6f}'.format(df['test'].min()))
+        c = df_c.sort_values(by='mse').iloc[0]['mse_test']
+        wc = df_wc.sort_values(by='mse').iloc[0]['mse_test']
+        o = df['test'].mean()
+        print('with constraints    : {:.6f}'.format(c))
+        print('without constraints : {:.6f}'.format(wc))
+        print('Neural net          : {:.6f}'.format(o))
         print('\n')
-        c = df_c['mse'].min()
-        wc = df_wc['mse'].min()
-        o = df['test'].min()
         better = min(c, wc) < o
         rows.append({'c': c, 'wc': wc, 'nnet': o, 'f': formula, 'better': better})
     df = pd.DataFrame(rows)
+    print(df['better'].mean())
     print('better at:')
     for f in df[df['better']]['f'].values.tolist():
         print(f)
@@ -681,11 +647,50 @@ def global_compare(*, folder='instances', model_type='neuralnet'):
 
 
 def print_heldout(*, folder='instances'):
-    for f in os.listdir(folder):
-        name = os.path.join(folder, f, 'data', 'held_out')
-        if os.path.exists(name):
-            formula = open(name).read()
-            print(formula)
+    df = _read_global(folder)
+    df_full = df
+    df_per_type = df.groupby(('id', 'type')).min().reset_index()
+    df = df.groupby('id').min().sort_values(by='mse')
+    df = df.reset_index() 
+    for _, f in df.iterrows():
+        name = os.path.join(folder, f['id'], 'data', 'held_out')
+        if not os.path.exists(name):
+            continue
+
+        neuralnet = os.path.join(folder, f['id'], 'out', 'neuralnet.csv')
+        if os.path.exists(neuralnet):
+            df_o = pd.read_csv(neuralnet)
+            nn_train = df_o['train'].mean()
+            nn_test = df_o['test'].mean()
+            print(nn_train)
+        else:
+            nn_train = None
+            nn_test = None
+
+        formula = open(name).read()
+        formula = _simplify(formula)
+
+        df_c = df_per_type[(df_per_type['id'] == f['id']) & (df_per_type['type'] == 'with_constraints')].iloc[0]
+        df_wc = df_per_type[(df_per_type['id'] == f['id']) & (df_per_type['type'] == 'without_constraints')].iloc[0]
+        
+        fc = df_full[(df_full['type'] == 'with_constraints') & (df_full['id'] == f['id']) & (df_full['mse'] == df_c['mse'])].iloc[0]['formula']
+        fc = _simplify(fc)
+        fwc = df_full[(df_full['type'] == 'without_constraints') & (df_full['id'] == f['id']) & (df_full['mse'] == df_wc['mse'])].iloc[0]['formula']
+        fwc = _simplify(fwc)
+        mse_c_train = df_c['mse']
+        mse_wc_train = df_wc['mse']
+        mse_c_test = df_c['mse_test'] if 'mse_test' in df_c else None
+        mse_wc_test = df_wc['mse_test'] if 'mse_test' in df_wc else None
+        print(f['id'])
+        print('gt : {}'.format(formula))
+        print('c  : {}'.format(fc))
+        print('wc : {}'.format(fwc))
+        print('train mse_c {:.12f}, train mse_wc : {:.12f}'.format(mse_c_train, mse_wc_train))
+        if mse_c_test and mse_wc_test:
+            print('test  mse_c {:.12f}, test  mse_wc : {:.12f}'.format(mse_c_test, mse_wc_test))
+        if nn_train and nn_test:
+            print('train nn : {:.12f} test nn : {:.12f}'.format(nn_train, nn_test))
+        print('\n', end='')
 
 
 def _evaluate_dataset(X, formula, symbols):
@@ -698,7 +703,7 @@ def _evaluate_dataset(X, formula, symbols):
     return y
 
 
-def _fit_model(corpus):
+def _fit_generative_model(corpus):
     min_gram = 1
     max_gram = 10
     model = NGram(min_gram=min_gram, max_gram=max_gram)
@@ -728,28 +733,28 @@ def _is_valid_output(y):
     return True
 
 
-def _get_curves(folder):
-    m1s = []
-    m2s = []
+def _get_mse_per_iteration(filename, label='mse'):
+    df = pd.read_csv(filename, index_col=0)
+    points = []
     for i in range(100):
-        d1 = '{}/formulas.csv_it{:03d}'.format(folder, i)
-        d2 = '{}/formulas_constraints.csv_it{:03d}'.format(folder, i)
-        if not os.path.exists(d1):
+        cur = '{}_it{:03d}'.format(filename, i)
+        if not os.path.exists(cur):
             continue
-        if not os.path.exists(d2):
-            continue
-        df1 = pd.read_csv(d1, index_col=0)
-        df2 = pd.read_csv(d2, index_col=0)
-        m1 = df1['mse'].min()
-        m2 = df2['mse'].min()
-        m1s.append(m1)
-        m2s.append(m2)
-    m1s = np.array(m1s)
-    m2s = np.array(m2s)
-    m1s = np.minimum.accumulate(m1s)
-    m2s = np.minimum.accumulate(m2s)
-    return m1s, m2s
+        df_cur = pd.read_csv(cur)
+        best = df_cur.sort_values(by='mse').iloc[0]
+        f = best['formula']
+        val = df[df['formula'] == f][label].iloc[0]
+        points.append(val)
+    points = np.minimum.accumulate(points)
+    return points
 
+
+def _simplify(formula):
+    from sympy import sin, cos, tan
+    from sympy import symbols
+    x, y , z, b = symbols('x y z b')
+    exec('result = {}'.format(formula))
+    return str((locals()['result']))
 
 
 if __name__ == '__main__':
@@ -758,5 +763,4 @@ if __name__ == '__main__':
         global_plots, 
         global_fit_numerical_data, 
         global_compare, 
-        global_heldout_eval,
         print_heldout,)
