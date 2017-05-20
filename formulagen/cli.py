@@ -647,6 +647,10 @@ def global_compare(*, folder='instances', model_type='neuralnet'):
 
 
 def print_heldout(*, folder='instances'):
+    others = ['neuralnet', 'genetic']
+    others_train = {}
+    others_test = {}
+
     df = _read_global(folder)
     df_full = df
     df_per_type = df.groupby(('id', 'type')).min().reset_index()
@@ -657,15 +661,13 @@ def print_heldout(*, folder='instances'):
         if not os.path.exists(name):
             continue
 
-        neuralnet = os.path.join(folder, f['id'], 'out', 'neuralnet.csv')
-        if os.path.exists(neuralnet):
-            df_o = pd.read_csv(neuralnet)
-            nn_train = df_o['train'].mean()
-            nn_test = df_o['test'].mean()
-            print(nn_train)
-        else:
-            nn_train = None
-            nn_test = None
+        for o in others:
+            fname = os.path.join(folder, f['id'], 'out', '{}.csv'.format(o))
+            if not os.path.exists(fname):
+                continue
+            df_o = pd.read_csv(fname)
+            others_train[o] = df_o['train'].mean()
+            others_test[o] = df_o['test'].mean()
 
         formula = open(name).read()
         formula = _simplify(formula)
@@ -688,8 +690,10 @@ def print_heldout(*, folder='instances'):
         print('train mse_c {:.12f}, train mse_wc : {:.12f}'.format(mse_c_train, mse_wc_train))
         if mse_c_test and mse_wc_test:
             print('test  mse_c {:.12f}, test  mse_wc : {:.12f}'.format(mse_c_test, mse_wc_test))
-        if nn_train and nn_test:
-            print('train nn : {:.12f} test nn : {:.12f}'.format(nn_train, nn_test))
+
+        for o in others:
+            if o in others_train and o in others_test:
+                print('train {} : {:.12f} test {} : {:.12f}'.format(o, others_train[o], o, others_test[o]))
         print('\n', end='')
 
 
