@@ -13,7 +13,6 @@ import pandas as pd
 
 from machinedesign.text.ngram import NGram
 
-from formulagen.formula import get_symbols
 from formulagen.formula import gen_formula_tree
 from formulagen.formula import generate_dataset
 from formulagen.formula import constant_unit
@@ -96,25 +95,21 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
     symbols = ('x', 'y', 'z', 'b')
     units = {}
     units['x'] = Unit({'m': 1})
-    units['y'] = Unit({'s': 1})
+    units['y'] = Unit({'m': 1})
     units['z'] = Unit({'g': 1})
     units['b'] = constant_unit
-    # define generic function generator
-    gen = partial(
-        gen_formula_tree,
-        symbols=symbols,
-        units=units,
-        min_depth=min_depth,
-        max_depth=max_depth
-    )
-    # generate with constraints
+    
+    # define two functions to generate with, or without constraints
+    gen = partial(gen_formula_tree, symbols=symbols, units=units, min_depth=min_depth, max_depth=max_depth)
     gen_with_constraints = partial(gen, unit_constraints=True)
-    data = generate_dataset(gen_with_constraints, nb=nb_formulas)
-    data = list(data)
+    gen_without_constraints = partial(gen, unit_constraints=False)
 
+    # generate with constraints
+    data = generate_dataset(gen_with_constraints, nb=nb_formulas, force_symbols=symbols)
+    data = list(data)
     # generate points from one formula taken from the constrained formulas
     log.info('Generate points from the held-out formula...')
-    X = np.random.uniform(0, 1, size=(nb_points * 2, len(symbols)))#train/test
+    X = np.random.uniform(-3, 3, size=(nb_points * 2, len(symbols)))#train/test
     X = X.astype(np.float32)
 
     # take one formula and use it as a held-out formula
@@ -139,8 +134,7 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
     for d in data:
         check_constraints(d)
     # generate without constraints
-    gen_without_constraints = partial(gen, unit_constraints=False)
-    data = generate_dataset(gen_without_constraints, nb=nb_formulas)
+    data = generate_dataset(gen_without_constraints, nb=nb_formulas, force_symbols=symbols)
     data = list(data)
     name = os.path.join(folder, 'formulas.pkl')
     log.info('Save dataset to {}'.format(name))
@@ -259,7 +253,7 @@ def optimize_formulas(*, points='data/dataset.npz', points_test='data/test.npz',
             best += G
             best_vals += vals
             # remove duplicates from best
-            dup = _is_dup(best)
+            dup = _is_duplicate(best)
             best = [b for b, d in zip(best, dup) if not d]
             best_vals = [v for v, d in zip(best_vals, dup) if not d]
             # take only best nb_generated top
@@ -296,7 +290,7 @@ def optimize_formulas(*, points='data/dataset.npz', points_test='data/test.npz',
             all += G
             all_vals += vals
             # remove duplicates from best
-            dup = _is_dup(all)
+            dup = _is_duplicate(all)
             all = [b for b, d in zip(all, dup) if not d]
             all_vals = [v for v, d in zip(all_vals, dup) if not d]
             print(np.min(all_vals), len(all_vals))
@@ -348,43 +342,6 @@ def _evaluate_formulas(G, X, y_true, mean, sigma, symbols):
         df.append({'mse': mse, 'formula': formula, 'error': '', 'is_valid': True})
     df = pd.DataFrame(df)
     return df
-
-
-_not_none = lambda x:x is not None
-
-def _syntax_ok(s, units):
-    try:
-        t = as_tree(s, units=units)
-    except ParseError:
-        return False
-    else:
-        return True
-
-
-def _as_tree_or_none(s, *args, **kwargs):
-    try:
-        t = as_tree(s, *args, **kwargs)
-    except ParseError:
-        return None
-    else:
-        return t
-
-
-def _is_dup(G):
-    s = set()
-    d = []
-    for g in G:
-        if g in s:
-            d.append(True)
-        else:
-            d.append(False)
-            s.add(g)
-    return d
-
-
-def _drop_duplicates(G):
-    return list(set(G))
-
 
 
 def plot(*, folder='out'):
@@ -759,6 +716,42 @@ def _simplify(formula):
     x, y , z, b = symbols('x y z b')
     exec('result = {}'.format(formula))
     return str((locals()['result']))
+
+
+_not_none = lambda x:x is not None
+
+def _syntax_ok(s, units):
+    try:
+        t = as_tree(s, units=units)
+    except ParseError:
+        return False
+    else:
+        return True
+
+
+def _as_tree_or_none(s, *args, **kwargs):
+    try:
+        t = as_tree(s, *args, **kwargs)
+    except ParseError:
+        return None
+    else:
+        return t
+
+
+def _is_duplicate(G):
+    s = set()
+    d = []
+    for g in G:
+        if g in s:
+            d.append(True)
+        else:
+            d.append(False)
+            s.add(g)
+    return d
+
+
+def _drop_duplicates(G):
+    return list(set(G))
 
 
 if __name__ == '__main__':

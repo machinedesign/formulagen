@@ -235,7 +235,11 @@ def get_symbols(t):
     elif t.left:
         return get_symbols(t.left)
     else:
-        return set([t.label])
+        label = str(t.label)
+        if label.isalpha():
+            return set([t.label])
+        else:
+            return set()
 
 
 def evaluate(s, symbol_values):
@@ -259,7 +263,9 @@ def as_str(f):
         return str(f.label)
 
 
-def generate_dataset(generate_one, nb=1000, random_state=None):
+def generate_dataset(generate_one, nb=1000, force_symbols=None, random_state=None):
+    if force_symbols:
+        force_symbols = set(force_symbols)
     np.random.seed(random_state)
     data = []
     while len(data) < nb:
@@ -267,8 +273,11 @@ def generate_dataset(generate_one, nb=1000, random_state=None):
             inst = generate_one()
         except ValueError:
             continue
-        else:
-            data.append(inst)
+        if force_symbols:
+           symbs = get_symbols(inst)
+           if symbs != force_symbols:
+               continue
+        data.append(inst)
     return data
 
 
