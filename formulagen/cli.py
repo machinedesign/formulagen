@@ -1,5 +1,6 @@
 import time
 import logging
+from collections import defaultdict
 from functools import partial
 import os
 import pickle
@@ -131,6 +132,7 @@ def generate_data(folder='data', nb_formulas=1000, nb_points=1000):
     name = os.path.join(folder, 'formulas_constraints.pkl')
     log.info('Save dataset to {}'.format(name))
     save_dataset(data, symbols, units, name)
+
     for d in data:
         check_constraints(d)
     # generate without constraints
@@ -304,8 +306,6 @@ def optimize_formulas(*, points='data/dataset.npz', points_test='data/test.npz',
         df = pd.DataFrame({'formula': all, 'mse': all_vals})
         return df
 
-
-
     if algo == 'eda':
         df = eda()
     elif algo == 'eda_warm_start':
@@ -316,8 +316,8 @@ def optimize_formulas(*, points='data/dataset.npz', points_test='data/test.npz',
         df = eda_thresh()
     elif algo == 'one_step':
         df = one_step()
-    elif algo == 'bayesopt':
-        df = bayesopt()
+    else:
+        raise ValueError('unknown algo : {}'.format(algo))
     print(df['mse'].min())
     G = df['formula'].values.tolist()
     df_test = _evaluate_formulas(G, X_test, y_test, mean, sigma, symbols)
@@ -344,52 +344,7 @@ def _evaluate_formulas(G, X, y_true, mean, sigma, symbols):
     return df
 
 
-def plot(*, folder='out'):
-    """
-    plot evolution of MSE for the model trained on unconstrained
-    formulas and for the model trained on constrained formulas.
-    """
-    import pandas as pd
-    from bokeh.plotting import figure, output_file, show
-    from bokeh.charts import Histogram, Bar, BoxPlot
-    from bokeh.layouts import row
-
-    d1 = '{}/formulas.csv'.format(folder)
-    d2 = '{}/formulas_constraints.csv'.format(folder)
-
-    df1 = pd.read_csv(d1, index_col=0)
-    df1 = df1.sort_values(by='mse', ascending=False)
-    
-    df2 = pd.read_csv(d2, index_col=0)
-    df2 = df2.sort_values(by='mse', ascending=False)
-
-    output_file('{}/scatter.html'.format(folder))
-    p = figure(title="evolution of MSE with iter")
-    p.line(np.arange(len(df1)), df1['mse'], legend="without constraints", line_width=2, color='blue')
-    p.line(np.arange(len(df2)), df2['mse'], legend="with constraints", line_width=2, color='red')
-    show(p)
-    df = ([{'val': v, 'type': 'without constraints'} for v in df1['mse']] + 
-          [{'val': v, 'type': 'with constraints'} for v in df2['mse']])
-    df = pd.DataFrame(df)
-
-    output_file('{}/bar.html'.format(folder))
-    p = Bar(df, 'type', values='val', color='type', title="diff between with/without constraints", agg='mean')
-    show(p)
-
-    output_file('{}/boxplot.html'.format(folder))
-    p = BoxPlot(df, values='val', label='type', title="diff between with/without constraints")
-    show(p)
-    
-    mse_c = _get_mse_per_iteration(os.path.join(folder, 'formulas_constraints.csv'))
-    mse_wc = _get_mse_per_iteration(os.path.join(folder, 'formulas.csv'))
-    output_file('{}/iter.html'.format(folder))
-    p = figure(title="evolution of MSE with iter")
-    p.line(np.arange(len(mse_c)),  mse_c,  legend="with constraints",  line_width=2, color='red')
-    p.line(np.arange(len(mse_wc)), mse_wc, legend="without constraints", line_width=2, color='blue')
-    show(p)
-
-
-def global_plots(*, folder='instances'):
+def iteration_plot(*, folder='instances'):
     import matplotlib as mpl
     mpl.use('Agg')
     import matplotlib.pyplot as plt
@@ -397,29 +352,47 @@ def global_plots(*, folder='instances'):
     import seaborn as sns
     c_mse_list   = []
     wc_mse_list  = []
-    nb_iter = 30
+    nb_iter = 10
     for i, instance in enumerate(os.listdir(folder)):
         filename_c = os.path.join(folder, instance, 'out', 'formulas_constraints.csv')
         filename_wc = os.path.join(folder, instance, 'out', 'formulas.csv')
         if not os.path.exists(filename_c) or not os.path.exists(filename_wc):
             continue
-        mse_c = _get_mse_per_iteration(filename_c, label='mse')
-        mse_wc = _get_mse_per_iteration(filename_wc, label='mse')
+        try:
+            pd.read_csv(filename_c)
+            pd.read_csv(filename_wc)
+        except pd.io.common.EmptyDataError:
+            continue
+        mse_c = _get_col_per_iteration(filename_c, label='mse_test')
+        mse_wc = _get_col_per_iteration(filename_wc, label='mse_test')
         if not(len(mse_c) == nb_iter and len(mse_wc) == nb_iter):
             continue
- 
+        if np.isnan(mse_wc).sum():
+            print(mse_wc)
         c_mse_list.append(mse_c)
         wc_mse_list.append(mse_wc)
     c_mse_arr = np.array(c_mse_list)
     wc_mse_arr  = np.array(wc_mse_list)
     fig = plt.figure()
-    ax = sns.tsplot(c_mse_arr,  time=np.arange(1, nb_iter + 1), color='red')
-    ax = sns.tsplot(wc_mse_arr, time=np.arange(1, nb_iter + 1), color='blue')
+    ax = sns.tsplot(c_mse_arr,  time=np.arange(1, nb_iter + 1), color='red', estimator=np.nanmedian)
+    ax = sns.tsplot(wc_mse_arr, time=np.arange(1, nb_iter + 1), color='blue', estimator=np.nanmedian)
     ax.legend(["with constraints", "without constraints"])
     plt.xlabel('Iteration')
     plt.ylabel('Normalized MSE')
     plt.savefig('{}/iter_global.png'.format(folder))
 
+
+def compare_plot(*, folder='instances'):
+    import matplotlib as mpl
+    mpl.use('Agg')
+    import matplotlib.pyplot as plt
+    import pandas as pd
+    import seaborn as sns
+
+    df = _build_results_df(folder)
+    cols = [c for c in df.columns if 'rank' in c]
+    sns.barplot(data=df[cols])
+    plt.savefig('{}/compare.png'.format(folder))
 
 
 def global_fit_numerical_data(*, folder='instances', model_type='neuralnet'):
@@ -447,9 +420,11 @@ def _fit_numerical_data(*, folder='data', out='out', model_type='neuralnet'):
     X_test = data_test['X']
     y_test = data_test['y']
     m, s = y_train.mean(), y_train.std()
+    print(y_train.mean(), y_test.mean())
+    print(y_train.std(), y_test.std())
+
     y_train = (y_train - m) / s
     y_test = (y_test - m) / s
-
     if model_type == 'neuralnet':
         model = _fit_neural_net(X_train, y_train, folder=folder)
     elif model_type == 'genetic':
@@ -473,7 +448,7 @@ def _fit_neural_net(X, y, folder='.'):
     from keras.models import Model
     from keras.optimizers import Adam
     from keras.callbacks import ModelCheckpoint
-    nb_layers = 2
+    nb_layers = 1
     nb_units = 1000
     inp = Input((X.shape[1],))
     h = inp
@@ -516,7 +491,7 @@ def global_stats(*, folder='instances'):
     print('\nTop MSE < {}'.format(thresh))
     d = df.groupby(['id', 'type']).min().reset_index()
     print('Total Nb of repetitions : {}'.format(len(df['id'].unique())))
-    print(d.groupby('type').mean())
+    print(d.groupby('type').median())
     print(d.groupby('type').std())
     vals = d
     c = vals[vals['type']=='with_constraints']
@@ -550,7 +525,10 @@ def _read_global(folder):
             continue
         idx = instance
         for filename, t in ((f1, 'without_constraints'), (f2, 'with_constraints')):
-            df = pd.read_csv(filename)
+            try:
+                df = pd.read_csv(filename)
+            except pd.io.common.EmptyDataError:
+                break
             d = {'mse': df['mse'], 'type': [t] * len(df), 'id': [idx] * len(df), 'formula': df['formula']}
             if 'mse_test' in df.columns:
                 d['mse_test'] = df['mse_test']
@@ -567,91 +545,68 @@ def clean(folder):
         os.remove(filename)
 
 
-def global_compare(*, folder='instances', model_type='neuralnet'):
-    nb_better = 0
-    total = 0
-    rows = []
-    for f in os.listdir(folder):
-        outf = os.path.join(folder, f, 'out')
-        filename = os.path.join(outf, model_type + '.csv') 
-        if not os.path.exists(filename):
-            continue
-        if not os.path.exists(os.path.join(outf, 'formulas.csv')):
-            continue
-        if not os.path.exists(os.path.join(outf, 'formulas_constraints.csv')):
-            continue
-        formula = open(os.path.join(folder, f, 'data', 'held_out')).read()
-        df = pd.read_csv(filename)
-        df_c = pd.read_csv(os.path.join(outf, 'formulas_constraints.csv'))
-        df_wc = pd.read_csv(os.path.join(outf, 'formulas.csv'))
-        c = df_c.sort_values(by='mse').iloc[0]['mse_test']
-        wc = df_wc.sort_values(by='mse').iloc[0]['mse_test']
-        o = df['test'].mean()
-        print('with constraints    : {:.6f}'.format(c))
-        print('without constraints : {:.6f}'.format(wc))
-        print('Neural net          : {:.6f}'.format(o))
-        print('\n')
-        better = min(c, wc) < o
-        rows.append({'c': c, 'wc': wc, 'nnet': o, 'f': formula, 'better': better})
-    df = pd.DataFrame(rows)
-    print(df['better'].mean())
-    print('better at:')
-    for f in df[df['better']]['f'].values.tolist():
-        print(f)
-    print('worse at:')
-    for f in df[~df['better']]['f'].values.tolist():
-        print(f)
+def show_results(*, folder='instances'):
+    df = _build_results_df(folder)
+    ranks = [c for c in df.columns if 'rank' in c]
+    for rank in ranks:
+        s = rank + ' ' * (20 - len(rank))
+        print('{} mean {:.6f} std {:.6f}'.format(s, df[rank].mean(), df[rank].std()))
 
 
-def print_heldout(*, folder='instances'):
+def _build_results_df(folder):
     others = ['neuralnet', 'genetic']
-    others_train = {}
-    others_test = {}
-
     df = _read_global(folder)
-    df_full = df
-    df_per_type = df.groupby(('id', 'type')).min().reset_index()
-    df = df.groupby('id').min().sort_values(by='mse')
-    df = df.reset_index() 
-    for _, f in df.iterrows():
-        name = os.path.join(folder, f['id'], 'data', 'held_out')
+    ranks = defaultdict(list)
+    rows = []
+    for id_, group in df.groupby('id'):
+        res_train = {}
+        res_test = {}
+        ranks = {}
+        name = os.path.join(folder, id_, 'data', 'held_out')
         if not os.path.exists(name):
             continue
-
         for o in others:
-            fname = os.path.join(folder, f['id'], 'out', '{}.csv'.format(o))
+            fname = os.path.join(folder, id_, 'out', '{}.csv'.format(o))
             if not os.path.exists(fname):
                 continue
             df_o = pd.read_csv(fname)
-            others_train[o] = df_o['train'].mean()
-            others_test[o] = df_o['test'].mean()
+            res_train[o] = df_o['train'].mean()
+            res_test[o] = df_o['test'].mean()
 
         formula = open(name).read()
         formula = _simplify(formula)
-
-        df_c = df_per_type[(df_per_type['id'] == f['id']) & (df_per_type['type'] == 'with_constraints')].iloc[0]
-        df_wc = df_per_type[(df_per_type['id'] == f['id']) & (df_per_type['type'] == 'without_constraints')].iloc[0]
         
-        fc = df_full[(df_full['type'] == 'with_constraints') & (df_full['id'] == f['id']) & (df_full['mse'] == df_c['mse'])].iloc[0]['formula']
+        df_c = group[group['type'] == 'with_constraints']
+        df_c = df_c.sort_values(by='mse')
+        df_c = df_c.iloc[0]
+        df_wc = group[group['type'] == 'without_constraints']
+        df_wc = df_wc.sort_values(by='mse')
+        df_wc = df_wc.iloc[0]
+        
+        fc = df_c['formula']
         fc = _simplify(fc)
-        fwc = df_full[(df_full['type'] == 'without_constraints') & (df_full['id'] == f['id']) & (df_full['mse'] == df_wc['mse'])].iloc[0]['formula']
+        fwc = df_wc['formula']
         fwc = _simplify(fwc)
-        mse_c_train = df_c['mse']
-        mse_wc_train = df_wc['mse']
-        mse_c_test = df_c['mse_test'] if 'mse_test' in df_c else None
-        mse_wc_test = df_wc['mse_test'] if 'mse_test' in df_wc else None
-        print(f['id'])
-        print('gt : {}'.format(formula))
-        print('c  : {}'.format(fc))
-        print('wc : {}'.format(fwc))
-        print('train mse_c {:.12f}, train mse_wc : {:.12f}'.format(mse_c_train, mse_wc_train))
-        if mse_c_test and mse_wc_test:
-            print('test  mse_c {:.12f}, test  mse_wc : {:.12f}'.format(mse_c_test, mse_wc_test))
+        
+        res_train['c'] = df_c['mse']
+        res_test['c'] = df_c['mse_test']
 
-        for o in others:
-            if o in others_train and o in others_test:
-                print('train {} : {:.12f} test {} : {:.12f}'.format(o, others_train[o], o, others_test[o]))
-        print('\n', end='')
+        res_train['wc'] = df_wc['mse']
+        res_test['wc'] = df_wc['mse_test']
+        for i, k in enumerate(sorted(res_test.keys(), key=lambda k:res_test[k])):
+            ranks[k] = i + 1
+        
+        labels = res_test.keys()
+        row = {}
+        for label in labels:
+            row['train_{}'.format(label)] = res_train[label]
+            row['test_{}'.format(label)] = res_test[label]
+            row['rank_{}'.format(label)] = ranks[label]
+        row['fc'] = fc # best formula constraints
+        row['fwc'] = fwc # best formula without constraints
+        row['gt'] = formula # groundtruth formula
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _evaluate_dataset(X, formula, symbols):
@@ -694,7 +649,7 @@ def _is_valid_output(y):
     return True
 
 
-def _get_mse_per_iteration(filename, label='mse'):
+def _get_col_per_iteration(filename, label='mse'):
     df = pd.read_csv(filename, index_col=0)
     points = []
     for i in range(100):
@@ -757,7 +712,7 @@ def _drop_duplicates(G):
 if __name__ == '__main__':
     run(full,  
         global_stats, 
-        global_plots, 
         global_fit_numerical_data, 
-        global_compare, 
-        print_heldout,)
+        iteration_plot,
+        compare_plot,
+        show_results)
